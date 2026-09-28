@@ -2,6 +2,14 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/).
 
+## 2026-09-28 — Revisión del Plan de Mejora Valkiria 2026
+
+### Añadido
+- `docs/revision-historias-2026.md`: revisión de EPIC-001 y HU-002 a HU-009 con hallazgos transversales, evaluación INVEST de cada historia original, contraste con el código y recomendaciones priorizadas.
+
+### Cambiado
+- `docs/epica-historias-invest.md` v3.0: historias mejoradas con la numeración del plan, KPIs, glosario de fases, dependencias, requisitos transversales RT-01 a RT-06, Definición de Terminado, HU-004 dividida (HU-004B) y HU-008 dividida (HU-008A/B), y HU-011 propuesta para incorporarse al plan.
+
 ## 2026-09-28 — Quality gates por agente
 
 ### Corregido
