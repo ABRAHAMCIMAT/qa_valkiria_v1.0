@@ -25,6 +25,10 @@
 8. Las funciones sintéticas son deterministas.
 9. No usar `assert True` como evidencia funcional.
 10. Documentar limitaciones y estados reales.
+11. Capturar excepciones concretas. Una captura genérica solo se admite en una frontera de aislamiento y con `noqa` justificado.
+12. La configuración se lee solo mediante `Settings`; nada de `os.getenv` disperso.
+13. Toda variable nueva de `Settings` se añade a `.env.example` (lo exige una prueba).
+14. Ruff y Bandit sin hallazgos antes de integrar; las reglas están fijadas en `pyproject.toml`.
 
 ## Evolución
 

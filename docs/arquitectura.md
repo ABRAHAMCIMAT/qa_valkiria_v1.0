@@ -35,6 +35,15 @@ Agentes disponibles: Intake, Grounding, Generation, Evaluation, Database, Automa
 
 Los requests nunca reciben DSN, contraseñas ni tokens. Las conexiones se resuelven desde configuración externa.
 
+## Configuración y despliegue
+
+`infrastructure/settings.py` centraliza la configuración con pydantic-settings (prefijo `VALKIRIA_`, `.env` opcional, secretos como `SecretStr`). La API y la aplicación sintética se empaquetan en la misma imagen Docker; Compose las levanta junto a PostgreSQL y Kubernetes despliega la API. Detalle en [Despliegue](despliegue.md).
+
+```text
+docker-compose.synthetic.yml
+  postgres (5432) ← synthetic-app (8090) ← api (8000, sirve el frontend en "/")
+```
+
 ## Principios
 
 1. Arquitectura hexagonal: el dominio depende de puertos.
@@ -46,4 +55,4 @@ Los requests nunca reciben DSN, contraseñas ni tokens. Las conexiones se resuel
 
 ## Producción
 
-El modo `synthetic` es el perfil de desarrollo y CI. Producción requiere persistencia durable, OIDC/JWT, gestor de secretos, control de concurrencia, observabilidad centralizada y adaptadores externos con pruebas de contrato.
+El modo `synthetic` es el perfil de desarrollo y CI. `VALKIRIA_ENVIRONMENT=production` no arranca sin `VALKIRIA_ALLOW_PRODUCTION=true`. Producción requiere persistencia durable, OIDC/JWT, gestor de secretos, control de concurrencia, observabilidad centralizada y adaptadores externos con pruebas de contrato.

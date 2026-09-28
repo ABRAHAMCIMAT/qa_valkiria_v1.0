@@ -44,12 +44,27 @@ docker compose -f docker-compose.synthetic.yml up -d --wait postgres
 RUN_SYNTHETIC_E2E=1 pytest -v tests/e2e
 ```
 
+Paquete e imagen:
+
+```bash
+python -m build
+docker compose -f docker-compose.synthetic.yml up -d --build --wait
+curl http://localhost:8000/health
+```
+
+## Integración continua
+
+Cada push a `main` y cada Pull Request ejecutan `.github/workflows/ci.yml`: Ruff y Bandit, unitarias y E2E contra PostgreSQL, wheel y sdist, e imagen Docker con el entorno Compose. Un cambio no se considera listo con el CI en rojo. Modificar el workflow requiere un token con permiso `workflow`. Detalle en [Despliegue](despliegue.md#integración-continua).
+
+Antes de subir cambios, integrar primero los de GitHub (`git fetch` y `git rebase origin/main`), porque el repositorio tiene más de un colaborador.
+
 ## Criterios de salida
 
 - Tests automatizados.
 - Quality gates con evidencia.
 - Sin secretos.
-- Documentación actualizada.
+- Documentación y `CHANGELOG.md` actualizados.
+- CI en verde.
 - Limitaciones declaradas.
 - Preview diferenciado de release.
 - Sin commits directos.

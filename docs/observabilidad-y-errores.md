@@ -37,6 +37,14 @@ El detalle técnico queda en logs sanitizados y nunca en la respuesta pública.
 
 Registrar duración total y por fase, timeouts, errores por agente, gates fallidos, artefactos, filas afectadas, rollbacks, casos Playwright y costo/tokens cuando estén disponibles.
 
+## Salud
+
+`GET /health` devuelve estado, modo, entorno, modelo, agentes y políticas activas, y la aplicación sintética expone su propio `/health`. Los usan:
+
+- El `HEALTHCHECK` de la imagen Docker y los healthchecks de Compose.
+- Las sondas de disponibilidad y de vida de Kubernetes.
+- El trabajo `docker` del CI.
+
 ## Diagnóstico
 
 El primer dato de investigación es el `trace_id`. El orquestador distingue `blocked`, `waiting_approval`, `failed` y `completed`; no deben colapsarse en un booleano de éxito.

@@ -8,12 +8,14 @@
 | Políticas | SQL peligroso, lotes y producción | `tests/test_hu010_hu011.py` |
 | Agentes | Router, registry, handoff y estados | `tests/test_multiagent_orchestration.py` |
 | Base sintética | Fixtures, consultas, rollback e idempotencia | `tests/test_synthetic_database.py` |
-| API sintética | Vehículos, órdenes y errores | `tests/e2e/test_synthetic_api.py` |
+| API sintética | Vehículos, órdenes y errores contra PostgreSQL real | `tests/e2e/test_synthetic_api.py` (asíncrona, pytest-asyncio) |
 | Observabilidad | JSON, redacción, trazas y métricas | pruebas de LLMOps y errores |
 | Proveedor LLM | JSON inválido, timeout y error HTTP | pruebas de contrato del proveedor |
 | Playwright | Casos, screenshots, consola, requests y responses | suite E2E con Chromium |
 | Configuración | Carga de `.env`, precedencia, secretos y bloqueo de producción | `tests/test_settings.py` |
 | CI | Ruff, Bandit, unitarias, E2E con PostgreSQL, paquete, imagen Docker y `/health` | `.github/workflows/ci.yml` |
+
+Las unitarias ignoran el `.env` local mediante `tests/conftest.py`, para que el resultado no dependa de cada máquina. La E2E solo corre con `RUN_SYNTHETIC_E2E=1` y usa `VALKIRIA_SYNTHETIC_DATABASE_URL`.
 
 ## Casos mínimos
 

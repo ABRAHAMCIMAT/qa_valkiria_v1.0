@@ -1,6 +1,6 @@
 # EPIC-001 — Plataforma Valkiria de QA multiagente, E2E sintética y LLMOps
 
-> **Versión documental:** 2.0 — rama `valkiria_nissan`.
+> **Versión documental:** 2.0 — repositorio `qa_valkiria_v1.0`, paquete 0.5.0.
 
 ## Objetivo
 

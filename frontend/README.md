@@ -45,4 +45,4 @@ La interfaz debe mostrar resultados verificables sin exponer cadenas de razonami
 
 ## Prueba local
 
-Arranca la API con `uvicorn` y abre `http://localhost:<puerto>/`: la API sirve el frontend en el mismo origen, sin CORS. Si abres `frontend/index.html` como archivo, usa `http://localhost:8000` o define `window.API_BASE`. Para la E2E, la aplicación Nissan sintética debe estar disponible en `VALKIRIA_SYNTHETIC_APP_BASE_URL` y utilizar el mismo perfil sintético que Valkiria.
+Arranca la API con `uvicorn` (o `docker compose -f docker-compose.synthetic.yml up -d --build --wait`) y abre `http://localhost:8000/`: la API sirve el frontend en el mismo origen, sin CORS. Si el frontend está en otra carpeta (por ejemplo `/app/frontend` en Docker), defínela con `VALKIRIA_FRONTEND_DIR`. Si abres `frontend/index.html` como archivo, usa `http://localhost:8000` o define `window.API_BASE`. Para la E2E, la aplicación Nissan sintética debe estar disponible en `VALKIRIA_SYNTHETIC_APP_BASE_URL` y utilizar el mismo perfil sintético que Valkiria.

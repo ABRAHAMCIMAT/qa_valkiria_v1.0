@@ -48,6 +48,15 @@ uvicorn valkiria.api.app:create_app --factory --port 8000
 
 Copia `.env.example` a `.env`; ya trae la URL exclusiva del contenedor sintético. Para levantar todo en contenedores usa `docker compose -f docker-compose.synthetic.yml up -d --build --wait`. Para habilitar Playwright real usa `VALKIRIA_AUTOMATION_EXECUTE=true`; preview es el valor seguro por defecto.
 
+## Ejecutar la prueba E2E
+
+```bash
+docker compose -f docker-compose.synthetic.yml up -d --wait postgres
+RUN_SYNTHETIC_E2E=1 pytest -v tests/e2e
+```
+
+La prueba es asíncrona (pytest-asyncio en modo `auto`) y se puede repetir: cada ejecución crea una orden nueva sin romper las verificaciones. En CI corre contra un PostgreSQL de servicio al que primero se aplican la migración y los fixtures.
+
 ## Petición
 
 ```text

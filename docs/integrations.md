@@ -14,11 +14,13 @@ VALKIRIA_LLM_MODEL
 VALKIRIA_LLM_API_KEY
 ```
 
-El proveedor aplica timeout, valida JSON y devuelve errores tipados. Las claves permanecen fuera del repositorio.
+El proveedor aplica timeout, valida JSON y devuelve errores tipados. `VALKIRIA_LLM_API_KEY` se maneja como `SecretStr` y puede quedar vacía para Ollama local. En Compose, la API usa `host.docker.internal:11434` o el servicio `ollama` del perfil `llm`. Las claves permanecen fuera del repositorio.
 
 ## PostgreSQL sintético
 
-`SyntheticPostgresExecutor` usa SQLAlchemy y psycopg. La URL se obtiene exclusivamente desde `VALKIRIA_SYNTHETIC_DATABASE_URL` y nunca desde el request. `docker-compose.synthetic.yml` levanta un contenedor con fixtures ficticios.
+`SyntheticPostgresExecutor` usa SQLAlchemy y psycopg. La URL se obtiene exclusivamente desde `VALKIRIA_SYNTHETIC_DATABASE_URL` y nunca desde el request. `docker-compose.synthetic.yml` levanta PostgreSQL 16 y aplica la migración y los fixtures ficticios al crear el volumen.
+
+Limitación: la política exige `LIMIT` en `UPDATE` y `DELETE`, y PostgreSQL no admite esa sintaxis, así que las mutaciones contra PostgreSQL terminan en `failed`. Las consultas funcionan con normalidad.
 
 ## SQLite
 
@@ -26,7 +28,7 @@ El proveedor aplica timeout, valida JSON y devuelve errores tipados. Las claves 
 
 ## Playwright
 
-`PlaywrightRunner` es opcional. Requiere el extra E2E, Chromium y `VALKIRIA_AUTOMATION_EXECUTE=true`. Captura screenshots, video, consola, requests, responses y duración.
+`PlaywrightRunner` es opcional. Requiere el extra E2E, Chromium y `VALKIRIA_AUTOMATION_EXECUTE=true`. La imagen Docker no incluye Chromium. Captura screenshots, video, consola, requests, responses y duración.
 
 ## Aplicación Nissan sintética
 

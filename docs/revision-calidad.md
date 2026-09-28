@@ -2,7 +2,7 @@
 
 ## Resultado
 
-La rama `valkiria_nissan` cuenta con capa multiagente, perfil sintético, adaptadores SQLite/PostgreSQL, aplicación Nissan de prueba, Playwright opcional, quality gates, logging JSON, errores uniformes y documentación en español.
+El repositorio cuenta con capa multiagente, perfil sintético, adaptadores SQLite/PostgreSQL, aplicación Nissan de prueba, Playwright opcional, quality gates, logging JSON, errores uniformes y documentación en español.
 
 ## Cobertura funcional
 
@@ -13,7 +13,8 @@ La rama `valkiria_nissan` cuenta con capa multiagente, perfil sintético, adapta
 - Fixtures Nissan deterministas.
 - Reportes y auditoría.
 - Perfil `synthetic` y bloqueo de producción.
-- CI con PostgreSQL efímero.
+- CI en GitHub Actions: lint, seguridad, unitarias, E2E con PostgreSQL, paquete, imagen Docker y `/health`.
+- Configuración tipada con pydantic-settings.
 
 ## Estado
 
@@ -21,20 +22,23 @@ La rama `valkiria_nissan` cuenta con capa multiagente, perfil sintético, adapta
 |---|---|
 | SQLite sintético | Implementado |
 | Puerto y ejecutores | Implementado |
-| PostgreSQL sintético | Implementado; requiere Docker y extras |
+| PostgreSQL sintético | Implementado; consultas validadas en E2E y CI. Mutaciones bloqueadas por la regla de `LIMIT` |
 | Fixtures Nissan | Implementado |
 | DatabaseAgent | Implementado |
 | Aplicación Nissan | Implementada |
 | Playwright | Opcional y controlado por configuración |
 | Release preview | Implementado como política |
 | PR real | Requiere adaptador GitHub autorizado |
+| Imagen Docker y Compose | Implementado y validado en CI |
+| Kubernetes | Manifiesto validado; sin despliegue real |
+| Publicación de imagen | Pendiente |
 | Persistencia productiva | Pendiente |
 | MySQL | Pendiente como matriz adicional |
 | SQL Server/Oracle | Condicionado |
 
 ## Limitaciones honestas
 
-La presencia del adaptador no demuestra disponibilidad de Docker, PostgreSQL, Ollama o Chromium en todos los entornos. La suite debe ejecutarse en CI o localmente con extras instalados. La aplicación sintética no es el sistema Nissan real y preview no es release.
+La presencia del adaptador no demuestra disponibilidad de Docker, PostgreSQL, Ollama o Chromium en todos los entornos. La suite corre en CI en cada push; los resultados de la última validación están en [Estado de validación](estado-validacion.md). La aplicación sintética no es el sistema Nissan real y preview no es release.
 
 ## Criterios de aceptación
 
