@@ -1,6 +1,6 @@
 # Estado de validación y pendientes de producción
 
-Última actualización: 2026-09-28 (commit `fe7efd5`).
+Última actualización: 2026-09-28 (corrección de mutaciones en PostgreSQL).
 
 ## CI en GitHub Actions
 
@@ -15,13 +15,14 @@ Ejecutada en macOS con Python 3.12.2 y Docker 29.8.1, con el código ya integrad
 | Docker daemon | `docker info` | Activo (Docker Desktop 29.8.1) |
 | Ruff | `ruff check src tests` | Sin errores |
 | Bandit | `bandit -q -c pyproject.toml -r src` | Sin hallazgos |
-| Unitarias | `pytest -q --ignore=tests/e2e` | 39 aprobadas (aisladas del `.env` local mediante `tests/conftest.py`) |
-| E2E sintética | `RUN_SYNTHETIC_E2E=1 pytest -v tests/e2e` | 1 aprobada contra PostgreSQL 16 (repetible) |
+| Unitarias | `pytest -q --ignore=tests/e2e` | 58 aprobadas (aisladas del `.env` local mediante `tests/conftest.py`) |
+| E2E sintética | `RUN_SYNTHETIC_E2E=1 pytest -v tests/e2e` | 5 aprobadas contra PostgreSQL 16 (flujo de la app sintética y mutaciones con límite); repetibles |
 | Paquete | `python -m build` | `valkiria-0.5.0-py3-none-any.whl` y `valkiria-0.5.0.tar.gz`; el wheel se instala y arranca en un entorno limpio |
 | Imagen Docker | `docker build -f deploy/docker/Dockerfile .` | 303 MB, usuario `uid=10001`, healthcheck activo |
 | Entorno Compose | `docker compose -f docker-compose.synthetic.yml up -d --build --wait` | `postgres`, `synthetic-app` y `api` en estado *healthy* |
 | `/health` | `curl localhost:8000/health`, `curl localhost:8090/health` | 200 en ambos; frontend `/` y `/assets` en 200 |
 | Consulta vía API a PostgreSQL | `POST /v1/database/scripts/execute` (SELECT) | `completed`, devuelve Sentra y Versa |
+| Mutación vía API a PostgreSQL | `POST /v1/database/scripts/execute` (`UPDATE ... LIMIT 1` con rollback) | `completed`, 1 fila afectada, reporte generado, datos intactos |
 | Workflow de CI | `actionlint .github/workflows/ci.yml` | Válido |
 | Kubernetes | `kubeconform -strict deploy/kubernetes/deployment.yaml` | 3 recursos válidos |
 
@@ -39,13 +40,18 @@ Ejecutada en macOS con Python 3.12.2 y Docker 29.8.1, con el código ya integrad
 - **CI con Node 24**: `actions/checkout@v7`, `actions/setup-python@v7`, `actions/upload-artifact@v7` y runner `ubuntu-24.04`.
 - **Kubernetes**: imagen `ghcr.io/abrahamcimat/qa_valkiria_v1.0:0.5.0`, ConfigMap, Secret opcional, sondas de salud, `runAsUser 10001`, seccomp, `/tmp` como `emptyDir` y Service.
 
+## Resuelto: mutaciones en PostgreSQL
+
+La política exigía `LIMIT` en `UPDATE`/`DELETE` y PostgreSQL no admite esa sintaxis, así que toda mutación terminaba en `failed` (`ProgrammingError`). Ahora el ejecutor traduce la forma simple a `WHERE ctid IN (SELECT ctid ... LIMIT n FOR UPDATE)`, registra la traducción en la evidencia y bloquea antes de conectar las formas que no puede traducir con seguridad. El límite también se exige ahora en cada `UPDATE`/`DELETE`, no en cualquier parte del script. Detalle en [HU-011](hu010-hu011.md#límite-de-filas-en-postgresql).
+
+Pendiente relacionado: los `INSERT ... VALUES` siguen requiriendo la palabra `LIMIT` en el script, igual que antes y en ambos motores. Es una decisión de política que no se cambió.
+
 ## Pendientes de producción
 
-1. **Mutaciones en PostgreSQL**: la política estática exige `LIMIT` en `UPDATE` y `DELETE`, pero PostgreSQL no admite `UPDATE ... LIMIT`. Por eso toda mutación contra PostgreSQL termina en `failed` (`ProgrammingError`); solo funciona en SQLite. Hay que adaptar la regla por motor (por ejemplo, `WHERE ctid IN (SELECT ctid ... LIMIT n)`) y cubrirla con una prueba E2E.
-2. **Publicar la imagen**: el CI la construye pero no la publica. Falta un trabajo que haga push a GHCR con etiqueta por versión y digest, y referenciar el digest en Kubernetes.
-3. **Persistencia**: auditoría, métricas, historias, lotes y reportes viven en memoria y se pierden al reiniciar. En Kubernetes, con 2 réplicas, cada pod tiene su propio estado. Falta un almacenamiento durable.
-4. **Secretos**: `VALKIRIA_LLM_API_KEY` y la URL de base de datos deben venir de un gestor de secretos (Secret de Kubernetes o proveedor externo). La contraseña `valkiria_synthetic_only` es exclusiva del entorno efímero.
-5. **LLM en contenedores**: Compose usa el Ollama del host o el perfil `llm`. Sin un modelo disponible, los endpoints que dependen del LLM responden 503 (error controlado).
-6. **Playwright en la imagen**: la imagen no incluye navegadores; `VALKIRIA_AUTOMATION_EXECUTE=true` requiere una imagen con Chromium.
-7. **Formato**: `ruff format --check` reformatearía unos 40 archivos, sobre todo líneas largas. No se aplicó para no mezclar un cambio masivo de estilo con correcciones funcionales, y no se exige en el CI.
-8. **Kubernetes**: el manifiesto se validó con `kubeconform`, pero no se desplegó en un clúster. Faltan Ingress/TLS, NetworkPolicy, HPA y PodDisruptionBudget según la plataforma de destino.
+1. **Publicar la imagen**: el CI la construye pero no la publica. Falta un trabajo que haga push a GHCR con etiqueta por versión y digest, y referenciar el digest en Kubernetes.
+2. **Persistencia**: auditoría, métricas, historias, lotes y reportes viven en memoria y se pierden al reiniciar. En Kubernetes, con 2 réplicas, cada pod tiene su propio estado. Falta un almacenamiento durable.
+3. **Secretos**: `VALKIRIA_LLM_API_KEY` y la URL de base de datos deben venir de un gestor de secretos (Secret de Kubernetes o proveedor externo). La contraseña `valkiria_synthetic_only` es exclusiva del entorno efímero.
+4. **LLM en contenedores**: Compose usa el Ollama del host o el perfil `llm`. Sin un modelo disponible, los endpoints que dependen del LLM responden 503 (error controlado).
+5. **Playwright en la imagen**: la imagen no incluye navegadores; `VALKIRIA_AUTOMATION_EXECUTE=true` requiere una imagen con Chromium.
+6. **Formato**: `ruff format --check` reformatearía unos 40 archivos, sobre todo líneas largas. No se aplicó para no mezclar un cambio masivo de estilo con correcciones funcionales, y no se exige en el CI.
+7. **Kubernetes**: el manifiesto se validó con `kubeconform`, pero no se desplegó en un clúster. Faltan Ingress/TLS, NetworkPolicy, HPA y PodDisruptionBudget según la plataforma de destino.

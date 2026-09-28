@@ -20,7 +20,7 @@ El proveedor aplica timeout, valida JSON y devuelve errores tipados. `VALKIRIA_L
 
 `SyntheticPostgresExecutor` usa SQLAlchemy y psycopg. La URL se obtiene exclusivamente desde `VALKIRIA_SYNTHETIC_DATABASE_URL` y nunca desde el request. `docker-compose.synthetic.yml` levanta PostgreSQL 16 y aplica la migración y los fixtures ficticios al crear el volumen.
 
-Limitación: la política exige `LIMIT` en `UPDATE` y `DELETE`, y PostgreSQL no admite esa sintaxis, así que las mutaciones contra PostgreSQL terminan en `failed`. Las consultas funcionan con normalidad.
+La política exige `LIMIT` en cada `UPDATE` y `DELETE`. Como PostgreSQL no admite esa sintaxis, el ejecutor traduce la forma simple a una subconsulta sobre `ctid` y registra la traducción en la evidencia; las formas ambiguas se bloquean antes de conectar. Detalle en [HU-011](hu010-hu011.md#límite-de-filas-en-postgresql).
 
 ## SQLite
 

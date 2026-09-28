@@ -27,7 +27,8 @@ Se consideran prompt injection, exposición de secretos, SQL destructivo, acceso
 
 - Análisis estático antes de ejecutar.
 - Bloqueo de sentencias peligrosas.
-- `WHERE`, límite, transacción y rollback para mutaciones.
+- `WHERE`, límite, transacción y rollback para mutaciones; el límite se exige en cada `UPDATE`/`DELETE`.
+- En PostgreSQL, la traducción del límite solo se aplica a formas simples y conserva el texto original; ante cualquier ambigüedad el script se bloquea (fail closed).
 - Errores del driver sanitizados.
 
 ## Release
@@ -48,7 +49,7 @@ Se consideran prompt injection, exposición de secretos, SQL destructivo, acceso
 
 ## Análisis estático
 
-Bandit no reporta hallazgos. Hay tres supresiones `# nosec B105` justificadas en el código: la clave `"pass"` (resultado de un caso) y los estados INVEST no son contraseñas. Ruff prohíbe capturas genéricas (`BLE001`); las tres que quedan (orquestador, ejecutor de PostgreSQL sintético y runner de Playwright) son fronteras de aislamiento con `noqa` justificado.
+Bandit no reporta hallazgos. Hay cinco supresiones justificadas en el código: tres `# nosec B105`, porque la clave `"pass"` (resultado de un caso) y los estados INVEST no son contraseñas, y dos `# nosec B608` en `sql_dialect.py`, porque la traducción de PostgreSQL solo recompone fragmentos del mismo script ya analizado y no incorpora datos externos. Ruff prohíbe capturas genéricas (`BLE001`); las tres que quedan (orquestador, ejecutor de PostgreSQL sintético y runner de Playwright) son fronteras de aislamiento con `noqa` justificado.
 
 ## Checklist
 

@@ -17,6 +17,11 @@ from valkiria.application.qa_artifacts import (
     PolicyViolation,
     automation_batch,
 )
+from valkiria.application.sql_dialect import (
+    split_statements,
+    statement_keyword,
+    translate_for_postgresql,
+)
 
 DATABASE_ENGINES = {"postgresql", "postgres", "oracle", "sqlserver", "mysql"}
 DATABASE_ENVIRONMENTS = {"development", "integration", "qa", "staging", "production"}
@@ -162,7 +167,7 @@ def suggest_database_tool(engine: str, language: str = "python", environment: st
     }
 
 
-def static_analyse_database_script(script: str) -> dict[str, Any]:
+def static_analyse_database_script(script: str, engine: str | None = None) -> dict[str, Any]:
     if not script or len(script) > 100_000:
         raise PolicyViolation("script_required_and_must_be_under_100kb")
     normalized = re.sub(r"--[^\n]*|/\*.*?\*/", " ", script, flags=re.DOTALL).strip()
@@ -181,6 +186,21 @@ def static_analyse_database_script(script: str) -> dict[str, Any]:
             findings.append(f"{keyword}_requires_where")
     if re.search(r"\b(limit|top|fetch\s+first)\b", normalized, re.IGNORECASE) is None and mutation:
         findings.append("mutation_requires_row_limit")
+    statements = split_statements(script)
+    # El límite debe estar en cada UPDATE/DELETE, no en cualquier otra sentencia del script.
+    for statement in statements:
+        if statement_keyword(statement) in {"update", "delete"} and not re.search(r"\b(limit|top|fetch\s+first)\b", statement, re.IGNORECASE):
+            findings.append("each_update_delete_requires_row_limit")
+            break
+    dialect_rewrites: list[dict[str, str]] = []
+    if engine and engine.lower().strip() in {"postgresql", "postgres"}:
+        for statement in statements:
+            translation = translate_for_postgresql(statement)
+            if translation.finding:
+                findings.append(translation.finding)
+            elif translation.rewritten:
+                dialect_rewrites.append({"original": translation.original, "executed": translation.executed})
+    findings = list(dict.fromkeys(findings))
     return {
         "passed": not findings,
         "findings": findings,
@@ -188,6 +208,7 @@ def static_analyse_database_script(script: str) -> dict[str, Any]:
         "transaction_detected": has_transaction,
         "rollback_detected": has_rollback,
         "normalized_length": len(normalized),
+        "dialect_rewrites": dialect_rewrites,
     }
 
 
@@ -325,7 +346,7 @@ def execute_database_script(*, engine: str, environment: str, script: str, case_
         raise PolicyViolation(f"unsupported_database_environment:{environment}")
     if normalized_environment == "production":
         return ({"id": str(uuid4()), "status": "blocked", "blocked": True, "environment": normalized_environment, "case_id": case_id, "alert": "database_execution_blocked_in_production", "report_generated": False, "actor": actor}, None)
-    analysis = static_analyse_database_script(script)
+    analysis = static_analyse_database_script(script, engine=normalized_engine)
     if not analysis["passed"]:
         return ({"id": str(uuid4()), "status": "blocked", "blocked": True, "environment": normalized_environment, "case_id": case_id, "static_analysis": analysis, "alert": "static_analysis_failed", "report_generated": False, "actor": actor}, None)
     started = time.perf_counter()

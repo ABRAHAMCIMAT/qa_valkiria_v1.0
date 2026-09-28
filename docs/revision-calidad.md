@@ -22,7 +22,7 @@ El repositorio cuenta con capa multiagente, perfil sintético, adaptadores SQLit
 |---|---|
 | SQLite sintético | Implementado |
 | Puerto y ejecutores | Implementado |
-| PostgreSQL sintético | Implementado; consultas validadas en E2E y CI. Mutaciones bloqueadas por la regla de `LIMIT` |
+| PostgreSQL sintético | Implementado; consultas y mutaciones con límite validadas en E2E y CI |
 | Fixtures Nissan | Implementado |
 | DatabaseAgent | Implementado |
 | Aplicación Nissan | Implementada |

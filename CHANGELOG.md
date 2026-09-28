@@ -2,6 +2,20 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/).
 
+## 2026-09-28 — Mutaciones en PostgreSQL
+
+### Corregido
+- Las mutaciones contra PostgreSQL siempre fallaban (`ProgrammingError`), porque la política exige `LIMIT` en `UPDATE`/`DELETE` y PostgreSQL no admite esa sintaxis. Ahora `UPDATE`/`DELETE ... WHERE cond LIMIT n` se traduce a `... WHERE ctid IN (SELECT ctid FROM t WHERE cond LIMIT n FOR UPDATE)`.
+
+### Añadido
+- `application/sql_dialect.py`: divisor de sentencias compartido y traducción de dialecto. Las formas ambiguas se rechazan con `postgresql_limit_requires_simple_form_or_subquery`.
+- `dialect_rewrites` en el análisis estático y en el resultado del ejecutor de PostgreSQL (sentencia original y ejecutada).
+- `tests/test_sql_dialect.py` (19 pruebas) y `tests/e2e/test_postgres_mutations.py` (4 E2E contra PostgreSQL).
+
+### Cambiado
+- `static_analyse_database_script` acepta un parámetro opcional `engine`; sin él no se aplica la validación de dialecto de PostgreSQL.
+- El límite de filas se exige en cada `UPDATE`/`DELETE` (`each_update_delete_requires_row_limit`), no en cualquier sentencia del script.
+
 ## 2026-09-28 — CI con Node 24 (`fe7efd5`)
 
 ### Cambiado

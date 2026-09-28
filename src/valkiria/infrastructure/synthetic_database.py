@@ -11,6 +11,7 @@ from valkiria.application.automation_execution import (
     build_evidence_report,
     static_analyse_database_script,
 )
+from valkiria.application.sql_dialect import split_statements, translate_for_postgresql
 
 NISSAN_SCHEMA = """
 CREATE TABLE IF NOT EXISTS vehicles (vehicle_id INTEGER PRIMARY KEY, model TEXT NOT NULL, year INTEGER NOT NULL, price REAL NOT NULL, stock INTEGER NOT NULL);
@@ -35,23 +36,6 @@ def seed_synthetic_nissan(connection: sqlite3.Connection) -> None:
     connection.executemany("INSERT OR IGNORE INTO parts VALUES (?, ?, ?)", [(1, "Filtro sintético", 25), (2, "Balata sintética", 0)])
     connection.executemany("INSERT OR IGNORE INTO test_cases VALUES (?, ?, ?)", [("HU011-TC-001", "Consultar vehículos disponibles", "Devuelve Sentra y Versa")])
     connection.commit()
-
-
-def _statements(script: str) -> list[str]:
-    # Divide por ";" y usa complete_statement para no cortar literales que contengan ";".
-    statements: list[str] = []
-    current = ""
-    for character in script:
-        current += character
-        if character == ";" and sqlite3.complete_statement(current):
-            statement = current.strip().rstrip(";").strip()
-            if statement:
-                statements.append(statement)
-            current = ""
-    remainder = current.strip().rstrip(";").strip()
-    if remainder:
-        statements.append(remainder)
-    return statements
 
 
 class SyntheticSQLiteExecutor:
@@ -80,7 +64,7 @@ class SyntheticSQLiteExecutor:
             rows: list[dict[str, Any]] = []
             affected_rows = 0
             try:
-                statements = _statements(script)
+                statements = split_statements(script)
                 is_query = len(statements) == 1 and statements[0].lower().startswith(("select", "with", "pragma"))
                 if is_query:
                     cursor = self.connection.execute(statements[0])
@@ -132,7 +116,7 @@ class SyntheticPostgresExecutor:
         return self._engine
 
     def execute(self, *, script: str, case_id: str, trace_id: str, output_format: str = "pdf") -> tuple[dict[str, Any], dict[str, Any] | None]:
-        analysis = static_analyse_database_script(script)
+        analysis = static_analyse_database_script(script, engine=self.engine)
         execution_id = hashlib.sha256(f"{case_id}:{script}:{trace_id}".encode()).hexdigest()[:24]
         if not analysis["passed"]:
             return {"id": execution_id, "status": "blocked", "blocked": True, "engine": self.engine, "case_id": case_id, "trace_id": trace_id, "static_analysis": analysis, "report_generated": False}, None
@@ -144,11 +128,12 @@ class SyntheticPostgresExecutor:
             with self._get_engine().connect() as connection:
                 transaction = connection.begin()
                 try:
-                    for statement in _statements(script):
+                    for statement in split_statements(script):
                         keyword = statement.lower().split(maxsplit=1)[0]
                         if keyword in {"begin", "start", "rollback", "commit"}:
                             continue
-                        query_result = connection.execute(text(statement))
+                        # UPDATE/DELETE ... LIMIT n no es válido en PostgreSQL; se ejecuta la forma equivalente con ctid.
+                        query_result = connection.execute(text(translate_for_postgresql(statement).executed))
                         if query_result.returns_rows:
                             rows = [dict(row._mapping) for row in query_result.fetchall()]
                         elif query_result.rowcount != -1:
@@ -156,9 +141,9 @@ class SyntheticPostgresExecutor:
                 finally:
                     transaction.rollback()
             duration_ms = round((time.perf_counter() - started) * 1000, 2)
-            logs = ["static_analysis=passed", "execution_mode=synthetic_postgresql", "transaction_policy=controlled_transaction", "result=pass"]
+            logs = ["static_analysis=passed", "execution_mode=synthetic_postgresql", "transaction_policy=controlled_transaction", f"dialect_rewrites={len(analysis['dialect_rewrites'])}", "result=pass"]
             report = build_evidence_report(execution_id=execution_id, title="Valkiria · Evidencia PostgreSQL sintética", output_format=output_format, fields={"execution_id": execution_id, "case_id": case_id, "engine": self.engine, "status": "pass", "affected_rows": affected_rows, "trace_id": trace_id}, logs=logs)
-            return {"id": execution_id, "status": "completed", "blocked": False, "engine": self.engine, "case_id": case_id, "trace_id": trace_id, "rows": rows, "affected_rows": affected_rows, "duration_ms": duration_ms, "logs": logs, "static_analysis": analysis, "report_generated": True, "report_id": report["id"]}, report
+            return {"id": execution_id, "status": "completed", "blocked": False, "engine": self.engine, "case_id": case_id, "trace_id": trace_id, "rows": rows, "affected_rows": affected_rows, "duration_ms": duration_ms, "logs": logs, "static_analysis": analysis, "dialect_rewrites": analysis["dialect_rewrites"], "report_generated": True, "report_id": report["id"]}, report
         except Exception as exc:  # noqa: BLE001 - adapter returns a sanitized database failure
             return {"id": execution_id, "status": "failed", "blocked": False, "engine": self.engine, "case_id": case_id, "trace_id": trace_id, "error": "synthetic_database_error", "error_type": type(exc).__name__, "report_generated": False}, None
 

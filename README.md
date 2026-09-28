@@ -187,7 +187,7 @@ Las pruebas sintéticas no usan datos reales. La URL de PostgreSQL se obtiene ú
 
 - No se aceptan contraseñas, tokens ni DSN en prompts o requests.
 - `DROP`, `TRUNCATE`, privilegios y comandos del sistema se bloquean.
-- Las mutaciones requieren transacción, `WHERE`, límite y rollback. En PostgreSQL esta política todavía impide ejecutar mutaciones, porque PostgreSQL no admite `UPDATE ... LIMIT` (pendiente documentado).
+- Las mutaciones requieren transacción, `WHERE`, límite en cada `UPDATE`/`DELETE` y rollback. PostgreSQL no admite `UPDATE ... LIMIT`, así que `UPDATE`/`DELETE ... WHERE cond LIMIT n` se traduce en PostgreSQL a `... WHERE ctid IN (SELECT ctid FROM t WHERE cond LIMIT n FOR UPDATE)`; las formas ambiguas se bloquean antes de conectar. Ver [HU-011](docs/hu010-hu011.md#límite-de-filas-en-postgresql).
 - No existe commit directo automático a `main`.
 - La persistencia predeterminada es temporal (en memoria) para desarrollo.
 - PostgreSQL sintético es el adaptador principal; MySQL puede incorporarse como matriz adicional.

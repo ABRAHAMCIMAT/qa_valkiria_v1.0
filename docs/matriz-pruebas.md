@@ -8,6 +8,8 @@
 | Políticas | SQL peligroso, lotes y producción | `tests/test_hu010_hu011.py` |
 | Agentes | Router, registry, handoff y estados | `tests/test_multiagent_orchestration.py` |
 | Base sintética | Fixtures, consultas, rollback e idempotencia | `tests/test_synthetic_database.py` |
+| Dialecto SQL | Traducción de `LIMIT` para PostgreSQL, rechazo de formas ambiguas y límite por sentencia | `tests/test_sql_dialect.py` |
+| Mutaciones en PostgreSQL | `UPDATE`/`DELETE` con límite, tope de filas, rollback y bloqueo previo | `tests/e2e/test_postgres_mutations.py` |
 | API sintética | Vehículos, órdenes y errores contra PostgreSQL real | `tests/e2e/test_synthetic_api.py` (asíncrona, pytest-asyncio) |
 | Observabilidad | JSON, redacción, trazas y métricas | pruebas de LLMOps y errores |
 | Proveedor LLM | JSON inválido, timeout y error HTTP | pruebas de contrato del proveedor |
