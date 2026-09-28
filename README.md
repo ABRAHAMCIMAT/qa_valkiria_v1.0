@@ -54,7 +54,7 @@ POST /v1/agent/execute
 }
 ```
 
-La respuesta conserva `request_id`, `trace_id`, plan de agentes, artefactos, decisiones, quality gates y errores sanitizados.
+La respuesta conserva `request_id`, `trace_id`, plan de agentes, artefactos, decisiones, quality gates (uno por agente, con su fase; ver [Quality gates](docs/quality-gates.md#en-la-respuesta-del-orquestador)) y errores sanitizados.
 
 ## Endpoints
 

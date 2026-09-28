@@ -33,4 +33,10 @@ for deployment in postgres synthetic-app valkiria-api; do
   kubectl -n "$NAMESPACE" rollout status "deployment/$deployment" --timeout=180s
 done
 
+# Evita que la primera petición llegue a un pod de la versión anterior que aún se está apagando.
+for _ in $(seq 1 60); do
+  kubectl -n "$NAMESPACE" get pods --no-headers | grep -q Terminating || break
+  sleep 2
+done
+
 echo "==> Listo: http://localhost:8080  (salud: http://localhost:8080/health)"

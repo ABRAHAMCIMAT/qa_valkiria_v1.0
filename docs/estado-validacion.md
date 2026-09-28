@@ -41,6 +41,10 @@ Ejecutada en macOS con Python 3.12.2 y Docker 29.8.1, con el código ya integrad
 - **CI con Node 24**: `actions/checkout@v7`, `actions/setup-python@v7`, `actions/upload-artifact@v7` y runner `ubuntu-24.04`.
 - **Kubernetes**: imagen `ghcr.io/abrahamcimat/qa_valkiria_v1.0:0.5.0`, ConfigMap, Secret opcional, sondas de salud, `runAsUser 10001`, seccomp, `/tmp` como `emptyDir` y Service.
 
+## Resuelto: gates de agentes que comparten fase
+
+Los quality gates se guardaban por fase, y `database` y `automation` comparten la fase `evaluation`, así que el último en ejecutarse sobrescribía el gate del agente de evaluación. Ahora hay un gate por agente, con la fase como campo. Cambio de contrato: la clave del gate de operaciones pasa de `operate` a `operations`. Detalle en [Quality gates](quality-gates.md#en-la-respuesta-del-orquestador).
+
 ## Resuelto: mutaciones en PostgreSQL
 
 La política exigía `LIMIT` en `UPDATE`/`DELETE` y PostgreSQL no admite esa sintaxis, así que toda mutación terminaba en `failed` (`ProgrammingError`). Ahora el ejecutor traduce la forma simple a `WHERE ctid IN (SELECT ctid ... LIMIT n FOR UPDATE)`, registra la traducción en la evidencia y bloquea antes de conectar las formas que no puede traducir con seguridad. El límite también se exige ahora en cada `UPDATE`/`DELETE`, no en cualquier parte del script. Detalle en [HU-011](hu010-hu011.md#límite-de-filas-en-postgresql).
@@ -55,5 +59,4 @@ Pendiente relacionado: los `INSERT ... VALUES` siguen requiriendo la palabra `LI
 4. **LLM en contenedores**: Compose usa el Ollama del host o el perfil `llm`. Sin un modelo disponible, los endpoints que dependen del LLM responden 503 (error controlado).
 5. **Playwright en la imagen**: la imagen no incluye navegadores; `VALKIRIA_AUTOMATION_EXECUTE=true` requiere una imagen con Chromium.
 6. **Formato**: `ruff format --check` reformatearía unos 40 archivos, sobre todo líneas largas. No se aplicó para no mezclar un cambio masivo de estilo con correcciones funcionales, y no se exige en el CI.
-7. **Gate de base de datos**: `DatabaseAgent` comparte la fase `evaluation`, así que su quality gate sobrescribe el del agente de evaluación en `quality_gates`. Su artefacto `database` sí se conserva completo.
-8. **Kubernetes**: el manifiesto se desplegó y verificó en un clúster kind local (`deploy/kind/`), pero no en un clúster real. Faltan Ingress/TLS, NetworkPolicy, HPA y PodDisruptionBudget según la plataforma de destino.
+7. **Kubernetes**: el manifiesto se desplegó y verificó en un clúster kind local (`deploy/kind/`), pero no en un clúster real. Faltan Ingress/TLS, NetworkPolicy, HPA y PodDisruptionBudget según la plataforma de destino.

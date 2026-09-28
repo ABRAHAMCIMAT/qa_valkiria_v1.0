@@ -94,3 +94,13 @@ def test_exception_is_sanitized_and_does_not_leak_details():
     result = run(MultiAgentOrchestrator(registry).run("Una petición clara de más de veinte caracteres", trace_id="trace-5"))
     assert result.status == "failed"
     assert "secret-internal-detail" not in str(result.model_dump())
+
+
+def test_agents_sharing_a_phase_keep_their_own_quality_gate():
+    # Database y Automation comparten la fase de evaluación: ninguno debe sobrescribir el gate de otro.
+    result = run(MultiAgentOrchestrator(build_default_registry()).run("Validar vehículos Nissan contra una base sintética PostgreSQL y ejecutar casos Playwright E2E", trace_id="trace-gates"))
+    gates = result.quality_gates
+    for agent in ("evaluation", "database", "automation"):
+        assert gates[agent]["agent"] == agent
+        assert gates[agent]["phase"] == "evaluation"
+    assert set(gates) == set(result.plan.agents)

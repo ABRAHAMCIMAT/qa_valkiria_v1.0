@@ -2,6 +2,15 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/).
 
+## 2026-09-28 — Quality gates por agente
+
+### Corregido
+- `database` y `automation` comparten la fase `evaluation` con el agente de evaluación, y como los gates se guardaban por fase, el último sobrescribía a los demás. Ahora `quality_gates` tiene un gate por agente, con un campo `phase` nuevo.
+- `deploy/kind/up.sh` espera a que terminen los pods de la versión anterior antes de anunciar que el entorno está listo.
+
+### Cambiado (contrato de la API)
+- Las claves de `quality_gates` son los nombres de los agentes. La única que cambia es la del agente de operaciones: pasa de `operate` a `operations`. Todas las demás ya coincidían.
+
 ## 2026-09-28 — Despliegue en Kubernetes local
 
 ### Añadido

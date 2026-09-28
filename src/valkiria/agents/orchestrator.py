@@ -74,4 +74,5 @@ class MultiAgentOrchestrator:
             raise RuntimeError("El handoff rechazó un trace_id inconsistente.")
         context.artifacts.update(result.artifacts)
         context.decisions.extend(result.decisions)
-        context.quality_gates[result.phase.value] = {"status": result.gate_status, "agent": result.agent, "outcome": result.status}
+        # Un gate por agente: varios agentes comparten fase (evaluation) y no deben sobrescribirse.
+        context.quality_gates[result.agent] = {"status": result.gate_status, "agent": result.agent, "phase": result.phase.value, "outcome": result.status}
