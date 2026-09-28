@@ -1,12 +1,12 @@
 import asyncio
 
 from valkiria.agents.contracts import AgentContext, AgentResult
+from valkiria.agents.grounding import GroundingAgent
 from valkiria.agents.intake import IntakeAgent
+from valkiria.agents.operations import OperationsAgent
 from valkiria.agents.orchestrator import MultiAgentOrchestrator
 from valkiria.agents.registry import AgentRegistry, build_default_registry
 from valkiria.agents.router import AgentRouter
-from valkiria.agents.grounding import GroundingAgent
-from valkiria.agents.operations import OperationsAgent
 
 
 def run(coro):
@@ -15,7 +15,7 @@ def run(coro):
 
 def test_registry_contains_all_specialized_agents():
     registry = build_default_registry()
-    assert registry.names() == ["intake", "grounding", "generation", "evaluation", "database", "approval", "release", "operations"]
+    assert registry.names() == ["intake", "grounding", "generation", "evaluation", "database", "automation", "approval", "release", "operations"]
 
 
 def test_router_selects_multiple_agents_for_complex_request():

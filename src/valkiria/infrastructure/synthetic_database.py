@@ -7,7 +7,10 @@ import threading
 import time
 from typing import Any
 
-from valkiria.application.automation_execution import build_evidence_report, static_analyse_database_script
+from valkiria.application.automation_execution import (
+    build_evidence_report,
+    static_analyse_database_script,
+)
 
 NISSAN_SCHEMA = """
 CREATE TABLE IF NOT EXISTS vehicles (vehicle_id INTEGER PRIMARY KEY, model TEXT NOT NULL, year INTEGER NOT NULL, price REAL NOT NULL, stock INTEGER NOT NULL);
@@ -36,15 +39,15 @@ def seed_synthetic_nissan(connection: sqlite3.Connection) -> None:
 
 def _statements(script: str) -> list[str]:
     statements: list[str] = []
-    current: list[str] = []
-    for line in script.splitlines():
-        current.append(line)
-        if sqlite3.complete_statement("\n".join(current)):
-            statement = "\n".join(current).strip().rstrip(";").strip()
+    current = ""
+    for character in script:
+        current += character
+        if character == ";" and sqlite3.complete_statement(current):
+            statement = current.strip().rstrip(";").strip()
             if statement:
                 statements.append(statement)
-            current = []
-    remainder = "\n".join(current).strip().rstrip(";").strip()
+            current = ""
+    remainder = current.strip().rstrip(";").strip()
     if remainder:
         statements.append(remainder)
     return statements
@@ -134,15 +137,27 @@ class SyntheticPostgresExecutor:
         try:
             from sqlalchemy import text
             started = time.perf_counter()
-            with self._get_engine().begin() as connection:
-                result = connection.execute(text(script))
-                rows = [dict(row._mapping) for row in result.fetchall()] if result.returns_rows else []
-                affected_rows = result.rowcount if result.rowcount != -1 else 0
+            rows: list[dict[str, Any]] = []
+            affected_rows = 0
+            with self._get_engine().connect() as connection:
+                transaction = connection.begin()
+                try:
+                    for statement in _statements(script):
+                        keyword = statement.lower().split(maxsplit=1)[0]
+                        if keyword in {"begin", "start", "rollback", "commit"}:
+                            continue
+                        query_result = connection.execute(text(statement))
+                        if query_result.returns_rows:
+                            rows = [dict(row._mapping) for row in query_result.fetchall()]
+                        elif query_result.rowcount != -1:
+                            affected_rows += query_result.rowcount
+                finally:
+                    transaction.rollback()
             duration_ms = round((time.perf_counter() - started) * 1000, 2)
             logs = ["static_analysis=passed", "execution_mode=synthetic_postgresql", "transaction_policy=controlled_transaction", "result=pass"]
             report = build_evidence_report(execution_id=execution_id, title="Valkiria · Evidencia PostgreSQL sintética", output_format=output_format, fields={"execution_id": execution_id, "case_id": case_id, "engine": self.engine, "status": "pass", "affected_rows": affected_rows, "trace_id": trace_id}, logs=logs)
             return {"id": execution_id, "status": "completed", "blocked": False, "engine": self.engine, "case_id": case_id, "trace_id": trace_id, "rows": rows, "affected_rows": affected_rows, "duration_ms": duration_ms, "logs": logs, "static_analysis": analysis, "report_generated": True, "report_id": report["id"]}, report
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - adapter returns a sanitized database failure
             return {"id": execution_id, "status": "failed", "blocked": False, "engine": self.engine, "case_id": case_id, "trace_id": trace_id, "error": "synthetic_database_error", "error_type": type(exc).__name__, "report_generated": False}, None
 
 

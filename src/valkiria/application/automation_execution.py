@@ -1,13 +1,22 @@
 from __future__ import annotations
 
+import base64
 import html
+import io
+import json
 import re
 import time
-from datetime import datetime, timezone
+import zipfile
+from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-from valkiria.application.qa_artifacts import MAX_AUTOMATION_BATCH, PolicyViolation, SUPPORTED_AUTOMATION_FRAMEWORKS, automation_batch
+from valkiria.application.qa_artifacts import (
+    MAX_AUTOMATION_BATCH,
+    SUPPORTED_AUTOMATION_FRAMEWORKS,
+    PolicyViolation,
+    automation_batch,
+)
 
 DATABASE_ENGINES = {"postgresql", "postgres", "oracle", "sqlserver", "mysql"}
 DATABASE_ENVIRONMENTS = {"development", "integration", "qa", "staging", "production"}
@@ -18,8 +27,112 @@ DATABASE_FRAMEWORKS = {
     "sqlserver": {"python": "pytest + SQLAlchemy", "java": "JDBC + Testcontainers", "node": "Jest + Knex.js"},
     "mysql": {"python": "pytest + SQLAlchemy", "java": "JDBC + Testcontainers", "node": "Jest + Knex.js"},
 }
-MUTATING_SQL = re.compile(r"\b(insert|update|delete|merge|replace)\b", re.I)
-DANGEROUS_SQL = re.compile(r"\b(drop|truncate|grant|revoke|create\s+user|alter\s+system|shutdown|xp_cmdshell|copy\s+.+\s+program|load\s+data\s+infile)\b", re.I)
+MUTATING_SQL = re.compile(r"\b(insert|update|delete|merge|replace)\b", re.IGNORECASE)
+DANGEROUS_SQL = re.compile(r"\b(drop|truncate|grant|revoke|create\s+user|alter\s+system|shutdown|xp_cmdshell|copy\s+.+\s+program|load\s+data\s+infile)\b", re.IGNORECASE)
+
+PLATFORM_PROFILES: dict[str, dict[str, Any]] = {
+    "web": {
+        "language": "typescript",
+        "default_tool": "playwright",
+        "tools": ["playwright", "selenium", "sikulix"],
+        "runtime": "nodejs",
+        "inspectors": ["browser-devtools", "playwright-inspector"],
+    },
+    "mobile": {
+        "language": "javascript",
+        "default_tool": "appium",
+        "tools": ["appium", "sikulix"],
+        "runtime": "nodejs",
+        "drivers": ["uiautomator2"],
+        "emulators": ["android-studio"],
+        "inspectors": ["appium-inspector"],
+    },
+    "desktop": {
+        "language": "csharp",
+        "default_tool": "winium",
+        "tools": ["winium", "sikulix"],
+        "inspectors": ["nappium-inspector"],
+    },
+    "database": {
+        "language": "sql",
+        "default_tool": "pytest-sqlalchemy",
+        "tools": ["pytest-sqlalchemy", "jdbc-testcontainers", "jest-knex"],
+    },
+    "api": {
+        "language": "javascript",
+        "default_tool": "postman-newman",
+        "tools": ["postman-newman", "restassured"],
+        "runtime": "nodejs",
+    },
+}
+
+
+def select_execution_tool(platform: str, preferred_tool: str | None = None) -> dict[str, Any]:
+    """Selecciona lenguaje y herramienta sin permitir combinaciones incompatibles."""
+    normalized_platform = platform.lower().strip()
+    normalized_platform = {
+        "bd": "database", "db": "database", "base de datos": "database",
+        "móvil": "mobile", "movil": "mobile",
+        "escritorio": "desktop",
+    }.get(normalized_platform, normalized_platform)
+    profile = PLATFORM_PROFILES.get(normalized_platform)
+    if profile is None:
+        raise PolicyViolation(f"unsupported_platform:{platform}")
+    tool = (preferred_tool or profile["default_tool"]).lower().strip()
+    if tool not in profile["tools"]:
+        raise PolicyViolation(f"tool_not_supported_for_platform:{tool}:{normalized_platform}")
+    return {"platform": normalized_platform, "tool": tool, **profile}
+
+
+def export_test_cases_to_excel(cases: list[dict[str, Any]], *, story_id: str = "") -> dict[str, Any]:
+    """Construye un XLSX mínimo válido sin macros ni fórmulas ejecutables."""
+    if not cases:
+        raise PolicyViolation("cases_required")
+    headers = ["story_id", "case_id", "criterion_id", "type", "priority", "scenario", "preconditions", "steps", "data", "expected_result"]
+    rows = [headers]
+    for case in cases:
+        rows.append([
+            story_id,
+            str(case.get("id", "")),
+            str(case.get("criterion_id", "")),
+            str(case.get("type", "")),
+            str(case.get("priority", "")),
+            str(case.get("scenario", "")),
+            " | ".join(map(str, case.get("preconditions", []))),
+            " | ".join(map(str, case.get("steps", []))),
+            str(case.get("data", {})),
+            str(case.get("expected_result", "")),
+        ])
+
+    def cell(reference: str, value: Any) -> str:
+        safe = html.escape(str(value), quote=False)
+        return f'<c r="{reference}" t="inlineStr"><is><t>{safe}</t></is></c>'
+
+    xml_rows = []
+    for row_number, row in enumerate(rows, 1):
+        xml_cells = []
+        for column_number, value in enumerate(row, 1):
+            number, letters = column_number, ""
+            while number:
+                number, remainder = divmod(number - 1, 26)
+                letters = chr(65 + remainder) + letters
+            xml_cells.append(cell(f"{letters}{row_number}", value))
+        xml_rows.append(f'<row r="{row_number}">{"".join(xml_cells)}</row>')
+    sheet = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>' + "".join(xml_rows) + "</sheetData></worksheet>"
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", '<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>')
+        archive.writestr("_rels/.rels", '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>')
+        archive.writestr("xl/workbook.xml", '<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Casos de prueba" sheetId="1" r:id="rId1"/></sheets></workbook>')
+        archive.writestr("xl/_rels/workbook.xml.rels", '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>')
+        archive.writestr("xl/worksheets/sheet1.xml", sheet)
+    content = output.getvalue()
+    return {
+        "filename": f"casos-{story_id or 'manuales'}.xlsx",
+        "media_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "content_base64": base64.b64encode(content).decode("ascii"),
+        "case_count": len(cases),
+    }
 
 
 def suggest_database_tool(engine: str, language: str = "python", environment: str = "qa") -> dict[str, Any]:
@@ -52,21 +165,21 @@ def suggest_database_tool(engine: str, language: str = "python", environment: st
 def static_analyse_database_script(script: str) -> dict[str, Any]:
     if not script or len(script) > 100_000:
         raise PolicyViolation("script_required_and_must_be_under_100kb")
-    normalized = re.sub(r"--[^\n]*|/\*.*?\*/", " ", script, flags=re.S).strip()
+    normalized = re.sub(r"--[^\n]*|/\*.*?\*/", " ", script, flags=re.DOTALL).strip()
     findings: list[str] = []
     if DANGEROUS_SQL.search(normalized):
         findings.append("dangerous_statement")
     mutation = bool(MUTATING_SQL.search(normalized))
-    has_transaction = bool(re.search(r"\b(begin|start\s+transaction)\b", normalized, re.I))
-    has_rollback = bool(re.search(r"\brollback\b", normalized, re.I))
+    has_transaction = bool(re.search(r"\b(begin|start\s+transaction)\b", normalized, re.IGNORECASE))
+    has_rollback = bool(re.search(r"\brollback\b", normalized, re.IGNORECASE))
     if mutation and not has_transaction:
         findings.append("mutation_requires_transaction")
     if mutation and not has_rollback:
         findings.append("mutation_requires_rollback")
     for keyword in ("update", "delete"):
-        if re.search(rf"\b{keyword}\b", normalized, re.I) and not re.search(r"\bwhere\b", normalized, re.I):
+        if re.search(rf"\b{keyword}\b", normalized, re.IGNORECASE) and not re.search(r"\bwhere\b", normalized, re.IGNORECASE):
             findings.append(f"{keyword}_requires_where")
-    if re.search(r"\b(limit|top|fetch\s+first)\b", normalized, re.I) is None and mutation:
+    if re.search(r"\b(limit|top|fetch\s+first)\b", normalized, re.IGNORECASE) is None and mutation:
         findings.append("mutation_requires_row_limit")
     return {
         "passed": not findings,
@@ -136,7 +249,7 @@ def build_evidence_report(*, execution_id: str, title: str, output_format: str, 
         "filename": filename,
         "media_type": media_type,
         "content": content,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
     }
 
 
@@ -146,19 +259,60 @@ def generate_scripts_for_batch(cases: list[dict[str, Any]], *, framework: str, p
         raise PolicyViolation(f"unsupported_automation_framework:{framework}")
     if len(cases) > MAX_AUTOMATION_BATCH:
         raise PolicyViolation(f"automation_requires_batches:max={MAX_AUTOMATION_BATCH}:received={len(cases)}")
+    selection = select_execution_tool(platform, normalized_framework)
     result = {}
     for case in cases:
-        case_id = str(case.get("id", "unknown"))
+        case_id = str(case.get("id") or "").strip()
+        if not case_id:
+            raise PolicyViolation("case_id_required")
         scenario = str(case.get("scenario", "generated scenario")).replace("\n", " ")
-        result[case_id] = f"# traceability: {case_id}\n# framework: {normalized_framework}\n# platform: {platform}\n# pattern: Page Object Model\n# test data: externalized\n\ndef test_{re.sub(r'[^a-zA-Z0-9_]', '_', case_id).lower()}():\n    # TODO: implement: {scenario}\n    assert True\n"
+        safe_id = re.sub(r"[^a-zA-Z0-9_-]", "_", case_id)
+        if normalized_framework == "playwright":
+            test_title = json.dumps(f"{case_id}: {scenario}", ensure_ascii=False)
+            result[f"{safe_id}.spec.ts"] = (
+                "import { test, expect } from '@playwright/test';\n\n"
+                "class ApplicationPage {\n"
+                "  constructor(private readonly page: import('@playwright/test').Page) {}\n"
+                "  async open() { await this.page.goto(process.env.BASE_URL ?? 'http://localhost:8090'); }\n"
+                "  async expectReady() { await expect(this.page.locator('body')).toBeVisible(); }\n"
+                "}\n\n"
+                f"test({test_title}, async ({{ page }}) => {{\n"
+                "  const application = new ApplicationPage(page);\n"
+                "  await application.open();\n"
+                "  await application.expectReady();\n"
+                f"  await page.screenshot({{ path: 'artifacts/{safe_id}.png', fullPage: true }});\n"
+                "});\n"
+            )
+        elif normalized_framework == "selenium":
+            result[f"test_{safe_id.lower()}.py"] = (
+                "import os\nfrom selenium import webdriver\n\n"
+                f"def test_{safe_id.lower()}():\n"
+                "    driver = webdriver.Chrome()\n    try:\n"
+                "        driver.get(os.getenv('BASE_URL', 'http://localhost:8090'))\n"
+                "        assert driver.find_element('tag name', 'body').is_displayed()\n"
+                f"        driver.save_screenshot('artifacts/{safe_id}.png')\n"
+                "    finally:\n        driver.quit()\n"
+            )
+        elif normalized_framework == "appium":
+            result[f"{safe_id}.spec.js"] = (
+                "const { remote } = require('webdriverio');\n"
+                f"// traceability: {case_id} - {scenario}\n"
+                "// Uses Appium with the uiautomator2 driver and external capabilities.\n"
+                "async function run() {\n  const driver = await remote(require('./capabilities.json'));\n"
+                "  try { await driver.saveScreenshot('artifacts/" + safe_id + ".png'); } finally { await driver.deleteSession(); }\n}\nrun();\n"
+            )
+        else:
+            comment = "#" if normalized_framework != "winium" else "//"
+            result[f"{safe_id}.{('py' if normalized_framework == 'sikulix' else 'cs')}"] = f"{comment} traceability: {case_id}\n{comment} scenario: {scenario}\n{comment} tool: {selection['tool']}\n"
     return result
 
 
 def create_automation_batch(*, cases: list[dict[str, Any]], framework: str, platform: str, repository: str, base_branch: str, matrix_status: str) -> dict[str, Any]:
     if len(cases) > MAX_AUTOMATION_BATCH:
         return {"status": "requires_split", "max_cases": MAX_AUTOMATION_BATCH, "received": len(cases), "suggestion": "Divide la selección en lotes de máximo 15 casos."}
+    selection = select_execution_tool(platform, framework)
     batch = automation_batch(cases, framework=framework, repository=repository, base_branch=base_branch)
-    batch.update({"platform": platform.lower(), "matrix_status": matrix_status.lower(), "scripts": generate_scripts_for_batch(cases, framework=framework, platform=platform), "pr_required": True})
+    batch.update({"platform": selection["platform"], "language": selection["language"], "execution_tool": selection["tool"], "tooling": selection, "cases": cases, "matrix_status": matrix_status.lower(), "scripts": generate_scripts_for_batch(cases, framework=framework, platform=platform), "pr_required": True})
     return batch
 
 

@@ -5,7 +5,10 @@ from uuid import uuid4
 MAX_TEST_CASES = 30
 MAX_AUTOMATION_BATCH = 15
 SUPPORTED_PERFORMANCE_TOOLS = {'jmeter', 'k6', 'locust'}
-SUPPORTED_AUTOMATION_FRAMEWORKS = {'selenium', 'playwright', 'restassured', 'postman-newman'}
+SUPPORTED_AUTOMATION_FRAMEWORKS = {
+    'selenium', 'playwright', 'restassured', 'postman-newman',
+    'appium', 'winium', 'sikulix',
+}
 
 class PolicyViolation(ValueError):
     pass

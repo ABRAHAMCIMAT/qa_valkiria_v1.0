@@ -181,6 +181,7 @@
     </div>
     <div class="side-section">
       <h3>Herramientas</h3>
+      <div class="tool"><div><strong>Casos manuales</strong><small>Matriz · Exportación Excel</small></div><button class="btn" onclick="exportCases()">Exportar</button></div>
       <div class="tool"><div><strong>Scripts por lotes</strong><small>HU-010 · Playwright · PR obligatorio</small></div><button class="btn" onclick="generateAutomationBatch()">Generar</button></div>
       <div class="tool"><div><strong>Validación de base de datos</strong><small>HU-011 · PostgreSQL sintético</small></div><button class="btn" onclick="executeDatabaseDemo()">Ejecutar</button></div>
     </div>
@@ -219,7 +220,7 @@ const chat = document.getElementById('chat'), thread = document.getElementById('
 const input = document.getElementById('input'), sendBtn = document.getElementById('sendBtn');
 
 const AGENTS = [['intake','Intake','Solicitud'],['grounding','Grounding','Políticas'],['generation','Generación','Historia'],['evaluation','Evaluación','INVEST · Riesgo'],['automation','Automatización','Scripts'],['database','Base de datos','Validación'],['approval','Aprobación','Humana']];
-const state = { history: [], story: null, done: new Set(), busy: false, invest: null, risk: null, cases: null };
+const state = { history: [], story: null, done: new Set(), busy: false, invest: null, risk: null, cases: null, testCases: [] };
 
 function icon(n){ return '<svg class="icon-svg"><use href="#i-'+n+'"></use></svg>'; }
 function esc(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
@@ -259,6 +260,19 @@ function showError(turn, message, retry){
   turn.querySelector('.body').innerHTML = '<p>No pude completar este paso.</p><div class="notice error">'+esc(message)+'</div><div style="margin-top:10px"><button class="btn retry">'+icon('refresh')+'Reintentar</button></div>';
   turn.querySelector('.retry').onclick = () => { if(state.busy) return; turn.remove(); retry(); };
 }
+function downloadBase64(filename, mediaType, content){
+  const bytes = Uint8Array.from(atob(content), c => c.charCodeAt(0));
+  const url = URL.createObjectURL(new Blob([bytes], {type:mediaType}));
+  const link = document.createElement('a'); link.href = url; link.download = filename; link.click();
+  URL.revokeObjectURL(url);
+}
+async function exportCases(){
+  if(!state.testCases.length){ addTurn('assistant', '<div class="notice error">Primero genera la matriz de pruebas.</div>'); return; }
+  try {
+    const artifact = await api('/v1/test-cases/export', {story_id:state.story?.id || '', cases:state.testCases});
+    downloadBase64(artifact.filename, artifact.media_type, artifact.content_base64);
+  } catch(e){ addTurn('assistant', '<div class="notice error">'+esc(e.message)+'</div>'); }
+}
 
 /* Conversación: cada turno viaja con el historial reciente y la historia vigente */
 async function send(text){
@@ -277,7 +291,7 @@ async function converse(msg){
     let html = '<p>'+esc(d.reply)+'</p>';
     if(d.story){
       state.done.add('generation');
-      if(d.changes || (state.story && state.story.id !== d.story.id)){ state.invest = null; state.risk = null; state.cases = null; }
+      if(d.changes || (state.story && state.story.id !== d.story.id)){ state.invest = null; state.risk = null; state.cases = null; state.testCases = []; }
       state.story = d.story;
       html += storyDoc(d.story, d.changes);
     }
@@ -351,7 +365,7 @@ function renderInvest(d, current){
 const TYPE = { positive: 'Positivo', negative: 'Negativo', edge: 'Borde' }, PRIO = { high: 'Alta', medium: 'Media', low: 'Baja' };
 function renderMatrix(d, current){
   const cases = d.cases || [];
-  if(current) state.cases = cases.length;
+  if(current){ state.cases = cases.length; state.testCases = cases; }
   const count = t => cases.filter(c => c.type === t).length;
   const covered = new Set(cases.map(c => c.criterion_id).filter(Boolean)).size, total = state.story?.acceptance_criteria.length || covered;
   const summary = 'Diseñé '+cases.length+' casos: '+count('positive')+' positivos, '+count('negative')+' negativos y '+count('edge')+' de borde, cubriendo '+Math.min(covered,total)+' de '+total+' criterios de aceptación.';

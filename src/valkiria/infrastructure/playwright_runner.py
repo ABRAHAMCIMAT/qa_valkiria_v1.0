@@ -23,9 +23,9 @@ class PlaywrightRunner:
         async with async_playwright() as playwright:
             browser = await playwright.chromium.launch(headless=self.headless)
             context = await browser.new_context(record_video_dir=str(output / "video"))
-            page = await context.new_page()
-            page.set_default_timeout(self.timeout_ms)
             for case in cases:
+                page = await context.new_page()
+                page.set_default_timeout(self.timeout_ms)
                 case_id = str(case["id"])
                 started = time.perf_counter()
                 console_logs: list[str] = []
@@ -39,8 +39,10 @@ class PlaywrightRunner:
                     screenshot = output / f"{case_id}.png"
                     await page.screenshot(path=str(screenshot), full_page=True)
                     results.append({"case_id": case_id, "status": "pass", "traceable": True, "screenshot": str(screenshot), "console": console_logs, "requests": requests, "responses": responses, "duration_ms": round((time.perf_counter() - started) * 1000, 2)})
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 - boundary translates vendor errors per case
                     results.append({"case_id": case_id, "status": "fail", "traceable": True, "error": "playwright_case_failed", "error_type": type(exc).__name__, "console": console_logs, "requests": requests, "responses": responses, "duration_ms": round((time.perf_counter() - started) * 1000, 2)})
+                finally:
+                    await page.close()
             await context.close()
             await browser.close()
         return results

@@ -8,7 +8,7 @@ from uuid import uuid4
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -18,8 +18,11 @@ from valkiria.agents.registry import build_default_registry
 from valkiria.api.errors import ApplicationError
 from valkiria.application.automation_execution import (
     PolicyViolation,
+    build_evidence_report,
     create_automation_batch,
     execute_database_script,
+    export_test_cases_to_excel,
+    select_execution_tool,
     suggest_database_tool,
 )
 from valkiria.application.use_cases import ValkiriaService
@@ -92,6 +95,16 @@ class DatabaseToolReq(BaseModel):
     engine: str
     language: str = "python"
     environment: str = "qa"
+
+
+class TestCaseExportReq(BaseModel):
+    story_id: str = ""
+    cases: list[dict[str, Any]] = Field(min_length=1, max_length=30)
+
+
+class ToolSelectionReq(BaseModel):
+    platform: str
+    preferred_tool: str | None = None
 
 
 def create_app():
@@ -201,6 +214,14 @@ def create_app():
         await batches.save(result)
         return result
 
+    @app.post("/v1/test-cases/export")
+    async def export_test_cases(req: TestCaseExportReq):
+        return export_test_cases_to_excel(req.cases, story_id=req.story_id)
+
+    @app.post("/v1/automation/tools/select")
+    async def select_automation_tool(req: ToolSelectionReq):
+        return select_execution_tool(req.platform, req.preferred_tool)
+
     @app.get("/v1/automation/batches/{batch_id}")
     async def get_automation_batch(batch_id: str):
         result = await batches.get(batch_id)
@@ -209,11 +230,33 @@ def create_app():
         return result
 
     @app.post("/v1/automation/batches/{batch_id}/execute")
-    async def execute_automation_batch(batch_id: str, x_actor: str = Header(default="anonymous")):
+    async def execute_automation_batch(batch_id: str, request: Request, x_actor: str = Header(default="anonymous")):
         batch = await batches.get(batch_id)
         if not batch:
             raise HTTPException(404, "automation_batch_not_found")
-        result = {"id": batch_id, "status": "completed", "actor": x_actor, "case_ids": batch["case_ids"], "results": [{"case_id": case_id, "status": "pass", "traceable": True} for case_id in batch["case_ids"]], "delivery": "pull_request_only", "direct_commit": False, "pr_required": True, "evidence_report": "generated_after_adapter_execution"}
+        if batch.get("execution_tool") != "playwright":
+            raise HTTPException(409, "configured_execution_tool_is_not_available_in_this_runner")
+        if automation_runner is None:
+            raise HTTPException(409, "playwright_runner_not_enabled")
+        results = await automation_runner.run(base_url=settings.synthetic_app_base_url, cases=batch.get("cases", []))
+        failed = any(item.get("status") == "fail" for item in results)
+        execution_id = str(uuid4())
+        report = build_evidence_report(
+            execution_id=execution_id,
+            title="Valkiria · Evidencia de automatización Playwright",
+            output_format="pdf",
+            fields={
+                "batch_id": batch_id,
+                "trace_id": request.state.trace_id,
+                "tool": "playwright",
+                "status": "failed" if failed else "passed",
+                "cases": len(results),
+            },
+            logs=[f"{item['case_id']}={item['status']}" for item in results],
+        )
+        await reports.save(report)
+        result = {"id": execution_id, "batch_id": batch_id, "status": "failed" if failed else "completed", "actor": x_actor, "trace_id": request.state.trace_id, "case_ids": batch["case_ids"], "results": results, "delivery": "pull_request_only", "direct_commit": False, "pr_required": True, "report_generated": True, "report_id": report["id"]}
+        await executions.save(result)
         batch["status"] = "executed"
         await batches.save(batch)
         return result
@@ -248,6 +291,18 @@ def create_app():
         if not report:
             raise HTTPException(404, "evidence_report_not_found")
         return report
+
+    @app.get("/v1/reports/{report_id}/download")
+    async def download_evidence_report(report_id: str):
+        report = await reports.get(report_id)
+        if not report:
+            raise HTTPException(404, "evidence_report_not_found")
+        encoding = "latin-1" if report["format"] == "pdf" else "utf-8"
+        return Response(
+            content=report["content"].encode(encoding),
+            media_type=report["media_type"],
+            headers={"Content-Disposition": f'attachment; filename="{report["filename"]}"'},
+        )
 
     @app.get("/v1/audit")
     async def audit_log():
