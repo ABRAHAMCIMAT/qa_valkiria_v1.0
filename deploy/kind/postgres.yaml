@@ -1,0 +1,45 @@
+# PostgreSQL efímero para pruebas (datos en emptyDir: se pierden al borrar el pod).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  labels: {app: postgres}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: postgres}}
+  template:
+    metadata: {labels: {app: postgres}}
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          env:
+            - {name: POSTGRES_USER, value: valkiria}
+            - {name: POSTGRES_PASSWORD, value: valkiria_synthetic_only}
+            - {name: POSTGRES_DB, value: nissan_synthetic}
+          ports: [{name: postgres, containerPort: 5432}]
+          readinessProbe:
+            exec: {command: ["pg_isready", "-U", "valkiria", "-d", "nissan_synthetic"]}
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+            - {name: init, mountPath: /docker-entrypoint-initdb.d, readOnly: true}
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: init
+          configMap: {name: synthetic-db-init}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  labels: {app: postgres}
+spec:
+  selector: {app: postgres}
+  ports:
+    - {name: postgres, port: 5432, targetPort: postgres}

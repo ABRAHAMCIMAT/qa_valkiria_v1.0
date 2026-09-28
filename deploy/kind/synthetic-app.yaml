@@ -1,0 +1,65 @@
+# Aplicación Nissan sintética: misma imagen que la API, otro comando.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: synthetic-app
+  labels: {app: synthetic-app}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: synthetic-app}}
+  template:
+    metadata: {labels: {app: synthetic-app}}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      # La app crea y consulta tablas al iniciar: espera a que PostgreSQL acepte conexiones.
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:16-alpine
+          command: ["sh", "-c", "until pg_isready -h postgres -p 5432 -U valkiria -d nissan_synthetic; do sleep 2; done"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+      containers:
+        - name: synthetic-app
+          image: ghcr.io/abrahamcimat/qa_valkiria_v1.0:0.5.0
+          imagePullPolicy: IfNotPresent
+          command: ["uvicorn", "valkiria.synthetic_app.app:create_synthetic_app", "--factory", "--host", "0.0.0.0", "--port", "8090"]
+          ports: [{name: http, containerPort: 8090}]
+          envFrom:
+            - secretRef: {name: valkiria-secrets}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /health, port: http}
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: synthetic-app
+  labels: {app: synthetic-app}
+spec:
+  selector: {app: synthetic-app}
+  ports:
+    - {name: http, port: 8090, targetPort: http}

@@ -107,6 +107,29 @@ kubectl apply -f deploy/kubernetes/deployment.yaml
 
 Pendiente: el CI aún no publica la imagen, y el estado en memoria no se comparte entre réplicas. Consulta [Estado de validación](estado-validacion.md).
 
+## Kubernetes local para pruebas (kind)
+
+`deploy/kind/` despliega el entorno completo en un clúster [kind](https://kind.sigs.k8s.io/) dentro de Docker, reutilizando el manifiesto de `deploy/kubernetes/` como base de kustomize.
+
+```bash
+deploy/kind/up.sh     # crea el clúster, construye y carga la imagen, aplica y espera (≈75 s desde cero)
+open http://localhost:8080
+deploy/kind/down.sh   # elimina el clúster y todo lo desplegado
+```
+
+Requisitos: Docker, `kind` y `kubectl` (`brew install kind kubectl`). Puedes volver a ejecutar `up.sh` después de cambiar el código: reconstruye la imagen y reinicia los pods.
+
+| Recurso (namespace `valkiria-local`) | Origen | Notas |
+|---|---|---|
+| `valkiria-api` | `deploy/kubernetes/deployment.yaml` | Parche local: 1 réplica y Service `NodePort` 30080, publicado en `127.0.0.1:8080` |
+| `synthetic-app` | `deploy/kind/synthetic-app.yaml` | Misma imagen; un `initContainer` espera a PostgreSQL |
+| `postgres` | `deploy/kind/postgres.yaml` | PostgreSQL 16 con migración y datos sintéticos (ConfigMap `synthetic-db-init`); datos en `emptyDir` |
+| `valkiria-secrets` | `deploy/kind/kustomization.yaml` | URL del PostgreSQL efímero |
+
+El parche `deploy/kind/api-patch.yaml` apunta el LLM a Ollama en la Mac anfitriona (`http://host.docker.internal:11434/v1`). Si Ollama no está corriendo (`ollama serve`), todo funciona salvo la generación con LLM: `/v1/agent/execute` responde `failed` en la fase de generación, de forma controlada.
+
+Verificado: `/health` y el frontend en 200; consultas y mutaciones con `LIMIT` contra PostgreSQL; `DROP TABLE` bloqueado; orquestador completo con `qwen2.5:7b`; pods con `uid 10001`, sistema de archivos de solo lectura y 0 reinicios.
+
 ## Nube
 
 `deploy/terraform/README.md` describe los destinos recomendados por proveedor. El repositorio no contiene credenciales ni recursos de infraestructura irreversibles.

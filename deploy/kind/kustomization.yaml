@@ -1,0 +1,19 @@
+# Overlay de pruebas locales en kind: API de la base + PostgreSQL sintético + aplicación sintética.
+# Uso: deploy/kind/up.sh (crea también el ConfigMap con las migraciones de synthetic_db/).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: valkiria-local
+resources:
+  - namespace.yaml
+  - ../kubernetes
+  - postgres.yaml
+  - synthetic-app.yaml
+secretGenerator:
+  - name: valkiria-secrets
+    options:
+      disableNameSuffixHash: true
+    literals:
+      # Credencial exclusiva del PostgreSQL efímero de pruebas.
+      - VALKIRIA_SYNTHETIC_DATABASE_URL=postgresql+psycopg://valkiria:valkiria_synthetic_only@postgres:5432/nissan_synthetic
+patches:
+  - path: api-patch.yaml

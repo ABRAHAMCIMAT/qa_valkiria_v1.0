@@ -2,6 +2,13 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/).
 
+## 2026-09-28 — Despliegue en Kubernetes local
+
+### Añadido
+- `deploy/kind/`: clúster kind con API, aplicación sintética y PostgreSQL, publicado en `http://localhost:8080` (`up.sh`, `down.sh`, overlay de kustomize y `kind-config.yaml`).
+- `deploy/kubernetes/kustomization.yaml`: el manifiesto pasa a ser base reutilizable por overlays.
+- `initContainer` que espera a PostgreSQL antes de arrancar la aplicación sintética.
+
 ## 2026-09-28 — Mutaciones en PostgreSQL
 
 ### Corregido

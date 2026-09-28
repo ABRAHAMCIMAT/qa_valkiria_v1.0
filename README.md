@@ -100,7 +100,8 @@ tests/                 Unitarias, conftest.py y tests/e2e (E2E sintética)
 frontend/              Interfaz conversacional servida por la API en "/"
 synthetic_db/          Migración de esquema y datos Nissan ficticios
 deploy/docker/         Dockerfile multi-etapa
-deploy/kubernetes/     ConfigMap, Deployment y Service
+deploy/kubernetes/     ConfigMap, Deployment y Service (base de kustomize)
+deploy/kind/           Overlay y scripts para probar en Kubernetes local (kind)
 deploy/terraform/      Guía de destinos en la nube
 docs/                  Documentación en español
 .github/workflows/     Pipeline de CI
@@ -168,6 +169,15 @@ docker compose -f docker-compose.synthetic.yml down -v   # apagar y borrar datos
 ```
 
 La imagen se construye desde `deploy/docker/Dockerfile`, corre como usuario no root (`uid 10001`) con sistema de archivos de solo lectura e incluye healthcheck. Dentro de Compose, la API usa el LLM del host (`host.docker.internal:11434`); para usar el contenedor de Ollama añade `--profile llm` y `VALKIRIA_DOCKER_LLM_BASE_URL=http://ollama:11434/v1`. Kubernetes y CI se describen en [Despliegue](docs/despliegue.md).
+
+## Kubernetes local para pruebas
+
+```bash
+deploy/kind/up.sh     # clúster kind con API, app sintética y PostgreSQL → http://localhost:8080
+deploy/kind/down.sh   # eliminarlo
+```
+
+Reutiliza el manifiesto de `deploy/kubernetes/`. Requiere Docker, `kind` y `kubectl`; con `ollama serve` corriendo, el orquestador usa el LLM local. Detalle en [Despliegue](docs/despliegue.md#kubernetes-local-para-pruebas-kind).
 
 ## Validaciones
 

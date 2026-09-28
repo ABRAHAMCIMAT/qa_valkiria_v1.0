@@ -1,0 +1,5 @@
+# Base: la API tal como se desplegaría. Los overlays (por ejemplo deploy/kind/) la reutilizan sin copiarla.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - deployment.yaml

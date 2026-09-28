@@ -25,6 +25,7 @@ Ejecutada en macOS con Python 3.12.2 y Docker 29.8.1, con el código ya integrad
 | Mutación vía API a PostgreSQL | `POST /v1/database/scripts/execute` (`UPDATE ... LIMIT 1` con rollback) | `completed`, 1 fila afectada, reporte generado, datos intactos |
 | Workflow de CI | `actionlint .github/workflows/ci.yml` | Válido |
 | Kubernetes | `kubeconform -strict deploy/kubernetes/deployment.yaml` | 3 recursos válidos |
+| Kubernetes local (kind) | `deploy/kind/up.sh` | 9 recursos aplicados; API, app sintética y PostgreSQL listos en unos 75 s desde cero, con 0 reinicios; `/health`, consultas, mutaciones, bloqueo de SQL peligroso y orquestador con LLM verificados en `localhost:8080` |
 
 ## Cambios realizados
 
@@ -54,4 +55,5 @@ Pendiente relacionado: los `INSERT ... VALUES` siguen requiriendo la palabra `LI
 4. **LLM en contenedores**: Compose usa el Ollama del host o el perfil `llm`. Sin un modelo disponible, los endpoints que dependen del LLM responden 503 (error controlado).
 5. **Playwright en la imagen**: la imagen no incluye navegadores; `VALKIRIA_AUTOMATION_EXECUTE=true` requiere una imagen con Chromium.
 6. **Formato**: `ruff format --check` reformatearía unos 40 archivos, sobre todo líneas largas. No se aplicó para no mezclar un cambio masivo de estilo con correcciones funcionales, y no se exige en el CI.
-7. **Kubernetes**: el manifiesto se validó con `kubeconform`, pero no se desplegó en un clúster. Faltan Ingress/TLS, NetworkPolicy, HPA y PodDisruptionBudget según la plataforma de destino.
+7. **Gate de base de datos**: `DatabaseAgent` comparte la fase `evaluation`, así que su quality gate sobrescribe el del agente de evaluación en `quality_gates`. Su artefacto `database` sí se conserva completo.
+8. **Kubernetes**: el manifiesto se desplegó y verificó en un clúster kind local (`deploy/kind/`), pero no en un clúster real. Faltan Ingress/TLS, NetworkPolicy, HPA y PodDisruptionBudget según la plataforma de destino.

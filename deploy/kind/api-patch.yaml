@@ -1,0 +1,30 @@
+# Ajustes solo para pruebas locales: 1 réplica (el estado vive en memoria),
+# URL interna de la app sintética, LLM de Ollama en la Mac anfitriona y Service NodePort publicado por kind en localhost:8080.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: valkiria-config
+data:
+  VALKIRIA_SYNTHETIC_APP_BASE_URL: http://synthetic-app:8090
+  VALKIRIA_ALLOWED_ORIGINS: http://localhost:8080
+  # Ollama corriendo en el equipo anfitrión (Docker Desktop resuelve host.docker.internal).
+  VALKIRIA_LLM_BASE_URL: http://host.docker.internal:11434/v1
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: valkiria-api
+spec:
+  replicas: 1
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: valkiria-api
+spec:
+  type: NodePort
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      nodePort: 30080
