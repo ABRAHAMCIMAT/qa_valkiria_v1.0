@@ -332,7 +332,8 @@ def execute_database_script(*, engine: str, environment: str, script: str, case_
     execution_id = str(uuid4())
     duration_ms = round((time.perf_counter() - started) * 1000, 2)
     logs = ["static_analysis=passed", "execution_mode=controlled_adapter_boundary", "transaction_policy=validated", "result=pass"]
-    result = {"id": execution_id, "status": "completed", "blocked": False, "environment": normalized_environment, "engine": normalized_engine, "case_id": case_id, "static_analysis": analysis, "pass": True, "affected_rows": 0, "duration_ms": duration_ms, "logs": logs, "actor": actor, "execution_mode": "controlled_adapter_boundary", "report_generated": True}
+    # "pass" es el resultado del caso, no una contraseña (falso positivo de Bandit B105).
+    result = {"id": execution_id, "status": "completed", "blocked": False, "environment": normalized_environment, "engine": normalized_engine, "case_id": case_id, "static_analysis": analysis, "pass": True, "affected_rows": 0, "duration_ms": duration_ms, "logs": logs, "actor": actor, "execution_mode": "controlled_adapter_boundary", "report_generated": True}  # nosec B105
     report = build_evidence_report(execution_id=execution_id, title="Valkiria · Evidencia de script de base de datos", output_format=output_format, fields={"execution_id": execution_id, "case_id": case_id, "engine": normalized_engine, "environment": normalized_environment, "status": "pass", "affected_rows": 0, "duration_ms": duration_ms}, logs=logs)
     result["report_id"] = report["id"]
     return result, report

@@ -3,6 +3,7 @@ from __future__ import annotations
 from valkiria.agents.base import BaseAgent
 from valkiria.agents.contracts import AgentContext
 from valkiria.llmops.lifecycle import Phase
+from valkiria.providers.openai_compatible import LLMProviderError
 
 
 class GenerationAgent(BaseAgent):
@@ -25,5 +26,6 @@ class GenerationAgent(BaseAgent):
         try:
             generated = await self.llm.generate_json(system="Razona la petición de QA por etapas y devuelve un artefacto JSON conciso, verificable y en español.", user=context.user_request, schema={"type": "object", "required": ["summary", "deliverables", "acceptance_criteria"]})
             return self.success(context, "El LLM generó un artefacto estructurado.", {"generation": {"mode": "llm", "version": "draft-1", "artifact": generated}})
-        except Exception as exc:
-            return self.failure(context, "La generación LLM no produjo una respuesta válida.", retryable=isinstance(exc, TimeoutError))
+        except (LLMProviderError, TimeoutError, ValueError) as exc:
+            retryable = isinstance(exc, TimeoutError) or getattr(exc, "code", None) == "llm_timeout"
+            return self.failure(context, "La generación LLM no produjo una respuesta válida.", retryable=retryable)

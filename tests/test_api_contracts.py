@@ -1,5 +1,8 @@
 from valkiria.api.errors import ResourceNotFoundError
-from valkiria.application.automation_execution import create_automation_batch, execute_database_script
+from valkiria.application.automation_execution import (
+    create_automation_batch,
+    execute_database_script,
+)
 
 
 def test_production_never_creates_evidence():

@@ -38,6 +38,7 @@ def seed_synthetic_nissan(connection: sqlite3.Connection) -> None:
 
 
 def _statements(script: str) -> list[str]:
+    # Divide por ";" y usa complete_statement para no cortar literales que contengan ";".
     statements: list[str] = []
     current = ""
     for character in script:
@@ -100,7 +101,8 @@ class SyntheticSQLiteExecutor:
                     self.connection.rollback()
                 duration_ms = round((time.perf_counter() - started) * 1000, 2)
                 logs = ["static_analysis=passed", "execution_mode=synthetic_sqlite", "transaction_policy=rollback_after_test", "result=pass"]
-                result = {"id": execution_id, "status": "completed", "blocked": False, "engine": self.engine, "case_id": case_id, "trace_id": trace_id, "static_analysis": analysis, "pass": True, "rows": rows, "affected_rows": affected_rows, "duration_ms": duration_ms, "logs": logs, "execution_mode": "synthetic_sqlite", "report_generated": True, "idempotency_key": execution_key}
+                # "pass" es el resultado del caso, no una contraseña (falso positivo de Bandit B105).
+                result = {"id": execution_id, "status": "completed", "blocked": False, "engine": self.engine, "case_id": case_id, "trace_id": trace_id, "static_analysis": analysis, "pass": True, "rows": rows, "affected_rows": affected_rows, "duration_ms": duration_ms, "logs": logs, "execution_mode": "synthetic_sqlite", "report_generated": True, "idempotency_key": execution_key}  # nosec B105
                 report = build_evidence_report(execution_id=execution_id, title="Valkiria · Evidencia Nissan sintética", output_format=output_format, fields={"execution_id": execution_id, "case_id": case_id, "engine": self.engine, "status": "pass", "affected_rows": affected_rows, "trace_id": trace_id}, logs=logs)
                 result["report_id"] = report["id"]
             except sqlite3.Error as exc:

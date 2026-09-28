@@ -33,14 +33,15 @@ Database y Automation se insertan cuando la solicitud los requiere.
 pip install -e '.[dev]'
 pytest -q
 ruff check src tests
-bandit -q -r src
+bandit -q -c pyproject.toml -r src
 ```
 
 Para la ruta sintética:
 
 ```bash
 pip install -e '.[dev,synthetic,e2e]'
-RUN_SYNTHETIC_E2E=1 pytest -q tests/e2e/test_synthetic_api.py
+docker compose -f docker-compose.synthetic.yml up -d --wait postgres
+RUN_SYNTHETIC_E2E=1 pytest -v tests/e2e
 ```
 
 ## Criterios de salida

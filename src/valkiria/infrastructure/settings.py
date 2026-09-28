@@ -1,35 +1,68 @@
 from __future__ import annotations
 
-import os
+from pathlib import Path
+from typing import Annotated
 
-from pydantic import BaseModel, Field
+from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+# Raíz del repositorio cuando se ejecuta desde el código fuente; en una instalación
+# empaquetada el archivo no existe y pydantic-settings lo ignora sin error.
+PROJECT_ROOT_ENV = Path(__file__).resolve().parents[3] / ".env"
 
 
-def _env_bool(name: str, default: bool) -> bool:
-    value = os.getenv(name)
-    if value is None:
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
+class Settings(BaseSettings):
+    """Configuración segura; los requests nunca reciben DSN ni credenciales.
 
+    Precedencia: variables de entorno > `.env` del directorio actual > `.env` de la raíz del repo > valores por defecto.
+    """
 
-class Settings(BaseModel):
-    """Configuración segura; los requests nunca reciben DSN ni credenciales."""
+    model_config = SettingsConfigDict(
+        env_prefix="VALKIRIA_",
+        env_file=(PROJECT_ROOT_ENV, ".env"),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
-    llm_base_url: str = os.getenv("VALKIRIA_LLM_BASE_URL", "http://localhost:11434/v1")
-    llm_model: str = os.getenv("VALKIRIA_LLM_MODEL", "qwen2.5:7b")
-    llm_api_key: str | None = os.getenv("VALKIRIA_LLM_API_KEY")
-    allowed_origins: list[str] = Field(default_factory=lambda: os.getenv("VALKIRIA_ALLOWED_ORIGINS", "http://localhost:3000").split(","))
-    mode: str = os.getenv("VALKIRIA_MODE", "synthetic")
-    environment: str = os.getenv("VALKIRIA_ENVIRONMENT", "qa")
-    allow_production: bool = _env_bool("VALKIRIA_ALLOW_PRODUCTION", False)
-    db_profile: str = os.getenv("VALKIRIA_DB_PROFILE", "synthetic_postgresql")
-    db_engine: str = os.getenv("VALKIRIA_DB_ENGINE", "postgresql")
-    synthetic_database_url: str | None = os.getenv("VALKIRIA_SYNTHETIC_DATABASE_URL")
-    automation_runner: str = os.getenv("VALKIRIA_AUTOMATION_RUNNER", "playwright")
-    automation_execute: bool = _env_bool("VALKIRIA_AUTOMATION_EXECUTE", False)
-    automation_headless: bool = _env_bool("VALKIRIA_AUTOMATION_HEADLESS", True)
-    automation_timeout_seconds: int = int(os.getenv("VALKIRIA_AUTOMATION_TIMEOUT_SECONDS", "30"))
-    release_mode: str = os.getenv("VALKIRIA_RELEASE_MODE", "preview")
-    direct_commit: bool = _env_bool("VALKIRIA_DIRECT_COMMIT", False)
-    pr_required: bool = _env_bool("VALKIRIA_PR_REQUIRED", True)
-    synthetic_app_base_url: str = os.getenv("VALKIRIA_SYNTHETIC_APP_BASE_URL", "http://localhost:8090")
+    llm_base_url: str = "http://localhost:11434/v1"
+    llm_model: str = "qwen2.5:7b"
+    llm_api_key: SecretStr | None = None
+    allowed_origins: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["http://localhost:3000"])
+    mode: str = "synthetic"
+    environment: str = "qa"
+    allow_production: bool = False
+    db_profile: str = "synthetic_postgresql"
+    db_engine: str = "postgresql"
+    synthetic_database_url: SecretStr | None = None
+    automation_runner: str = "playwright"
+    automation_execute: bool = False
+    automation_headless: bool = True
+    automation_timeout_seconds: int = Field(default=30, gt=0, le=600)
+    release_mode: str = "preview"
+    direct_commit: bool = False
+    pr_required: bool = True
+    synthetic_app_base_url: str = "http://localhost:8090"
+    # Vacío: usa `frontend/` del repositorio. En contenedores apunta a la copia empaquetada.
+    frontend_dir: str = ""
+
+    @field_validator("allowed_origins", mode="before")
+    @classmethod
+    def _split_origins(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [origin.strip() for origin in value.split(",") if origin.strip()]
+        return value
+
+    @field_validator("llm_api_key", "synthetic_database_url", mode="before")
+    @classmethod
+    def _empty_as_none(cls, value: object) -> object:
+        return None if isinstance(value, str) and not value.strip() else value
+
+    @model_validator(mode="after")
+    def _block_production(self) -> Settings:
+        if self.environment.lower() == "production" and not self.allow_production:
+            raise ValueError("VALKIRIA_ENVIRONMENT=production requiere VALKIRIA_ALLOW_PRODUCTION=true")
+        return self
+
+    def secret(self, name: str) -> str | None:
+        value = getattr(self, name)
+        return value.get_secret_value() if value is not None else None

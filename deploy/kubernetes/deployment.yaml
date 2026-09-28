@@ -1,15 +1,76 @@
+# Imagen construida por deploy/docker/Dockerfile. Publicarla antes de aplicar:
+#   docker build -f deploy/docker/Dockerfile -t ghcr.io/abrahamcimat/qa_valkiria_v1.0:0.5.0 .
+#   docker push ghcr.io/abrahamcimat/qa_valkiria_v1.0:0.5.0
+# Secretos esperados (opcionales): Secret "valkiria-secrets" con
+#   VALKIRIA_SYNTHETIC_DATABASE_URL y VALKIRIA_LLM_API_KEY.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: valkiria-config
+  labels: {app: valkiria-api}
+data:
+  VALKIRIA_MODE: synthetic
+  VALKIRIA_ENVIRONMENT: qa
+  VALKIRIA_ALLOW_PRODUCTION: "false"
+  VALKIRIA_DB_PROFILE: synthetic_postgresql
+  VALKIRIA_DB_ENGINE: postgresql
+  VALKIRIA_RELEASE_MODE: preview
+  VALKIRIA_DIRECT_COMMIT: "false"
+  VALKIRIA_PR_REQUIRED: "true"
+  VALKIRIA_AUTOMATION_EXECUTE: "false"
+---
 apiVersion: apps/v1
 kind: Deployment
-metadata: {name: valkiria-api}
+metadata:
+  name: valkiria-api
+  labels: {app: valkiria-api}
 spec:
   replicas: 2
   selector: {matchLabels: {app: valkiria-api}}
   template:
     metadata: {labels: {app: valkiria-api}}
     spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
       containers:
-      - name: api
-        image: ghcr.io/your-org/valkiria:0.1.0
-        ports: [{containerPort: 8000}]
-        securityContext: {runAsNonRoot: true, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true}
-        resources: {requests: {cpu: 100m, memory: 256Mi}, limits: {cpu: 1, memory: 1Gi}}
+        - name: api
+          image: ghcr.io/abrahamcimat/qa_valkiria_v1.0:0.5.0
+          imagePullPolicy: IfNotPresent
+          ports: [{name: http, containerPort: 8000}]
+          envFrom:
+            - configMapRef: {name: valkiria-config}
+            - secretRef: {name: valkiria-secrets, optional: true}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /health, port: http}
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: "1", memory: 1Gi}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: valkiria-api
+  labels: {app: valkiria-api}
+spec:
+  selector: {app: valkiria-api}
+  ports:
+    - {name: http, port: 80, targetPort: http}

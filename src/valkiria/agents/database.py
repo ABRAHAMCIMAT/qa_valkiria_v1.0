@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Any
-
 from valkiria.agents.base import BaseAgent
 from valkiria.agents.contracts import AgentContext
 from valkiria.domain.database_ports import DatabaseExecutor

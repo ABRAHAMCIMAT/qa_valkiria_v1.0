@@ -1,0 +1,3 @@
+# Finales de línea LF en el repositorio (evita CRLF en scripts, Dockerfile y YAML).
+* text=auto eol=lf
+*.png binary

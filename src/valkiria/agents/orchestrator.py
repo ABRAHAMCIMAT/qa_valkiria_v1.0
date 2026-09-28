@@ -58,7 +58,9 @@ class MultiAgentOrchestrator:
         while True:
             try:
                 result = await agent.execute(context)
-            except Exception as exc:
+            # Frontera de aislamiento: cualquier fallo de un agente se sanitiza para no
+            # filtrar detalles internos ni interrumpir la consolidación de auditoría.
+            except Exception as exc:  # noqa: BLE001
                 result = AgentResult(agent.name, agent.phase, "failed", f"El agente {agent.name} falló de forma controlada.", context.trace_id, gate_status="failed", retryable=False)
                 context.decisions.append({"agent": agent.name, "decision": "exception_sanitized", "error_type": type(exc).__name__})
             if not result.retryable or attempts >= 1 or result.status == "completed":

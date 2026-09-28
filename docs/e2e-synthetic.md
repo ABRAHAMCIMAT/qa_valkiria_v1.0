@@ -41,12 +41,12 @@ VALKIRIA_LLM_MODEL=qwen2.5:7b
 ```bash
 pip install -e '.[dev,synthetic,e2e]'
 python -m playwright install chromium
-docker compose -f docker-compose.synthetic.yml up -d postgres
+docker compose -f docker-compose.synthetic.yml up -d --wait postgres
 uvicorn valkiria.synthetic_app.app:create_synthetic_app --factory --port 8090
 uvicorn valkiria.api.app:create_app --factory --port 8000
 ```
 
-Copia `.env.synthetic.example` y configura la URL exclusiva del contenedor. Para habilitar Playwright real usa `VALKIRIA_AUTOMATION_EXECUTE=true`; preview es el valor seguro por defecto.
+Copia `.env.example` a `.env`; ya trae la URL exclusiva del contenedor sintético. Para levantar todo en contenedores usa `docker compose -f docker-compose.synthetic.yml up -d --build --wait`. Para habilitar Playwright real usa `VALKIRIA_AUTOMATION_EXECUTE=true`; preview es el valor seguro por defecto.
 
 ## Petición
 

@@ -1,0 +1,20 @@
+# Contexto mínimo: solo lo que la imagen necesita.
+.git
+.github
+.venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.ruff_cache
+*.egg-info
+build
+dist
+artifacts
+.env
+.env.*
+!.env.example
+.DS_Store
+deploy
+docs
+tests
+synthetic_db

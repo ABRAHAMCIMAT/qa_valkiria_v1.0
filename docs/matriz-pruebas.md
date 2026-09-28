@@ -12,7 +12,8 @@
 | Observabilidad | JSON, redacción, trazas y métricas | pruebas de LLMOps y errores |
 | Proveedor LLM | JSON inválido, timeout y error HTTP | pruebas de contrato del proveedor |
 | Playwright | Casos, screenshots, consola, requests y responses | suite E2E con Chromium |
-| CI | Pytest, Ruff, Bandit y PostgreSQL efímero | `ci.yml` |
+| Configuración | Carga de `.env`, precedencia, secretos y bloqueo de producción | `tests/test_settings.py` |
+| CI | Ruff, Bandit, unitarias, E2E con PostgreSQL, paquete, imagen Docker y `/health` | `.github/workflows/ci.yml` |
 
 ## Casos mínimos
 
@@ -42,8 +43,9 @@ Una historia no está lista con solo el camino feliz. Debe cubrir límites, erro
 ## Comandos
 
 ```bash
-pytest -q
-RUN_SYNTHETIC_E2E=1 pytest -q tests/e2e/test_synthetic_api.py
+pytest -q                                   # unitarias (la E2E se omite sin RUN_SYNTHETIC_E2E)
+RUN_SYNTHETIC_E2E=1 pytest -v tests/e2e     # E2E; requiere PostgreSQL sintético levantado
 ruff check src tests
-bandit -q -r src
+bandit -q -c pyproject.toml -r src
+python -m build                             # wheel y sdist en dist/
 ```

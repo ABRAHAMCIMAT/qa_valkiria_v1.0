@@ -22,6 +22,7 @@ La rama `valkiria_nissan` incorpora un perfil E2E seguro con datos Nissan fictic
 - [Patrones y mantenibilidad](docs/patrones-y-mantenibilidad.md)
 - [Proceso de desarrollo](docs/proceso-desarrollo.md)
 - [Revisión de calidad](docs/revision-calidad.md)
+- [Estado de validación y pendientes de producción](docs/estado-validacion.md)
 
 ## Flujo funcional
 
@@ -86,13 +87,15 @@ Playwright real solo se habilita explícitamente con `VALKIRIA_AUTOMATION_EXECUT
 ## Inicio local
 
 ```bash
-python -m venv .venv
+python3.12 -m venv .venv
 . .venv/bin/activate
 pip install -e '.[dev,synthetic,e2e]'
-cp .env.synthetic.example .env
-docker compose -f docker-compose.synthetic.yml up -d postgres
+cp .env.example .env
+docker compose -f docker-compose.synthetic.yml up -d --wait postgres
 python -m playwright install chromium
 ```
+
+`.env.example` es la única plantilla y coincide con `Settings` (una prueba lo verifica). La configuración se carga con pydantic-settings; las variables de entorno tienen prioridad sobre `.env`.
 
 Para arrancar la aplicación Nissan sintética y la API:
 
@@ -100,6 +103,18 @@ Para arrancar la aplicación Nissan sintética y la API:
 uvicorn valkiria.synthetic_app.app:create_synthetic_app --factory --port 8090
 uvicorn valkiria.api.app:create_app --factory --port 8000
 ```
+
+## Entorno Docker completo
+
+Levanta PostgreSQL sintético, la aplicación Nissan sintética y la API (que también sirve el frontend en `http://localhost:8000/`):
+
+```bash
+docker compose -f docker-compose.synthetic.yml up -d --build --wait
+curl http://localhost:8000/health
+docker compose -f docker-compose.synthetic.yml down -v   # apagar y borrar datos
+```
+
+La imagen se construye desde `deploy/docker/Dockerfile`, corre como usuario no root (`uid 10001`) con sistema de archivos de solo lectura e incluye healthcheck. Dentro de Compose, la API usa el LLM del host (`host.docker.internal:11434`); para usar el contenedor de Ollama añade `--profile llm` y `VALKIRIA_DOCKER_LLM_BASE_URL=http://ollama:11434/v1`.
 
 Para Ollama local:
 
@@ -111,11 +126,14 @@ ollama pull qwen2.5:7b
 ## Validaciones
 
 ```bash
-pytest -q
-RUN_SYNTHETIC_E2E=1 pytest -q tests/e2e/test_synthetic_api.py
+pytest -q                                   # unitarias (la E2E se omite sin RUN_SYNTHETIC_E2E)
+RUN_SYNTHETIC_E2E=1 pytest -v tests/e2e     # E2E; requiere PostgreSQL sintético levantado
 ruff check src tests
-bandit -q -r src
+bandit -q -c pyproject.toml -r src
+python -m build                             # wheel y sdist en dist/
 ```
+
+El CI (`.github/workflows/ci.yml`) ejecuta Ruff, Bandit, unitarias, E2E contra PostgreSQL, construcción del paquete y de la imagen Docker, y prueba `/health` del entorno Compose.
 
 Las pruebas sintéticas no usan datos reales. El URL de PostgreSQL se obtiene únicamente desde `VALKIRIA_SYNTHETIC_DATABASE_URL`; nunca se acepta dentro de un request.
 

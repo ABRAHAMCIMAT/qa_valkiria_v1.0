@@ -1,6 +1,10 @@
 from __future__ import annotations
-from typing import Protocol, Any
+
+from typing import Any, Protocol
+
 from .models import UserStory
+
+
 class LLMPort(Protocol):
     model_name: str
     async def generate_json(self, *, system: str, user: str, schema: dict[str, Any]) -> dict[str, Any]: ...

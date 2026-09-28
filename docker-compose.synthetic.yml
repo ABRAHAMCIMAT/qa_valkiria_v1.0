@@ -1,3 +1,31 @@
+# Entorno de desarrollo sintético completo (sin datos reales).
+#   Todo:            docker compose -f docker-compose.synthetic.yml up -d --build --wait
+#   Solo PostgreSQL: docker compose -f docker-compose.synthetic.yml up -d --wait postgres
+#   Con Ollama:      docker compose -f docker-compose.synthetic.yml --profile llm up -d --build --wait
+#                    (y VALKIRIA_DOCKER_LLM_BASE_URL=http://ollama:11434/v1)
+
+x-valkiria-image: &valkiria-image
+  build:
+    context: .
+    dockerfile: deploy/docker/Dockerfile
+  image: valkiria:0.5.0
+
+x-hardening: &hardening
+  read_only: true
+  tmpfs: [/tmp]
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+
+# URLs internas entre contenedores; sustituyen a las de localhost que pueda traer .env.
+x-internal-env: &internal-env
+  VALKIRIA_MODE: synthetic
+  VALKIRIA_ENVIRONMENT: qa
+  VALKIRIA_ALLOW_PRODUCTION: "false"
+  VALKIRIA_DB_PROFILE: synthetic_postgresql
+  VALKIRIA_DB_ENGINE: postgresql
+  VALKIRIA_SYNTHETIC_DATABASE_URL: postgresql+psycopg://valkiria:valkiria_synthetic_only@postgres:5432/nissan_synthetic
+  VALKIRIA_SYNTHETIC_APP_BASE_URL: http://synthetic-app:8090
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -6,16 +34,55 @@ services:
       POSTGRES_PASSWORD: valkiria_synthetic_only
       POSTGRES_DB: nissan_synthetic
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U valkiria -d nissan_synthetic"]
       interval: 5s
       timeout: 5s
       retries: 20
     volumes:
-      - ./synthetic_db/migrations:/docker-entrypoint-initdb.d:ro
+      # Se aplican en orden alfabético al crear el volumen: esquema y luego datos sintéticos.
+      - ./synthetic_db/migrations/V1__create_schema.sql:/docker-entrypoint-initdb.d/V1__create_schema.sql:ro
+      - ./synthetic_db/fixtures/V2__seed_nissan_data.sql:/docker-entrypoint-initdb.d/V2__seed_nissan_data.sql:ro
+
+  synthetic-app:
+    <<: [*valkiria-image, *hardening]
+    command: ["uvicorn", "valkiria.synthetic_app.app:create_synthetic_app", "--factory", "--host", "0.0.0.0", "--port", "8090"]
+    environment:
+      <<: *internal-env
+    ports:
+      - "127.0.0.1:8090:8090"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8090/health', timeout=4).status == 200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    <<: [*valkiria-image, *hardening]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *internal-env
+      VALKIRIA_LLM_BASE_URL: ${VALKIRIA_DOCKER_LLM_BASE_URL:-http://host.docker.internal:11434/v1}
+      VALKIRIA_ALLOWED_ORIGINS: http://localhost:8000,http://localhost:3000
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      synthetic-app:
+        condition: service_healthy
+
   ollama:
     image: ollama/ollama:latest
     ports:
-      - "11434:11434"
+      - "127.0.0.1:11434:11434"
     profiles: ["llm"]

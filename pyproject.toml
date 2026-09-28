@@ -6,11 +6,29 @@ build-backend = "setuptools.build_meta"
 name = "valkiria"
 version = "0.5.0"
 description = "Auditable multiagent QA platform with synthetic E2E and LLMOps lifecycle"
+readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["fastapi>=0.115,<1", "pydantic>=2.8,<3", "uvicorn>=0.30,<1", "httpx>=0.27,<1", "structlog>=24,<26", "sqlalchemy>=2.0,<3"]
+dependencies = [
+    "fastapi>=0.115,<1",
+    "pydantic>=2.8,<3",
+    "pydantic-settings>=2.7,<3",
+    "uvicorn>=0.30,<1",
+    "httpx>=0.27,<1",
+    "structlog>=24,<26",
+    "sqlalchemy>=2.0,<3",
+]
 
 [project.optional-dependencies]
-dev = ["pytest>=8,<9", "ruff>=0.6,<1", "mypy>=1.11,<2", "bandit>=1.7,<2"]
+dev = [
+    "pytest>=8,<9",
+    "pytest-asyncio>=0.24,<2",
+    "ruff>=0.6,<1",
+    "mypy>=1.11,<2",
+    "bandit>=1.7,<2",
+    "build>=1.2,<2",
+]
+# Driver de PostgreSQL para ejecutar la API contra la base sintética (incluido en la imagen Docker).
+postgres = ["psycopg[binary]>=3.2,<4"]
 synthetic = ["psycopg[binary]>=3.2,<4", "testcontainers[postgres]>=4.9,<5"]
 e2e = ["playwright>=1.50,<2"]
 
@@ -19,3 +37,20 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.ruff]
+target-version = "py311"
+src = ["src", "tests"]
+extend-exclude = ["frontend"]
+
+[tool.ruff.lint]
+# Selección explícita para que el resultado no dependa de los valores por defecto de cada versión de Ruff.
+select = ["E4", "E7", "E9", "F", "I", "B", "BLE", "UP", "FURB", "TRY004"]
+# UP042 (StrEnum) cambiaría str() de los enums del dominio; se mantiene (str, Enum).
+ignore = ["UP042"]
+
+[tool.bandit]
+exclude_dirs = ["tests", ".venv"]

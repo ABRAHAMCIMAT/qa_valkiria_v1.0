@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import create_engine, text
 
+from valkiria.infrastructure.settings import Settings
 
 SCHEMA = (
     "CREATE TABLE IF NOT EXISTS vehicles (vehicle_id INTEGER PRIMARY KEY, model VARCHAR(100) NOT NULL, year INTEGER NOT NULL, price NUMERIC(12,2) NOT NULL, stock INTEGER NOT NULL)",
@@ -28,7 +28,7 @@ class SalesOrderRequest(BaseModel):
 def create_synthetic_app(database_url: str | None = None) -> FastAPI:
     """Aplicación bajo prueba; usa PostgreSQL sintético si se configura y SQLite solo como fallback."""
     app = FastAPI(title="Nissan Synthetic App", version="1.1.0")
-    url = database_url or os.getenv("VALKIRIA_SYNTHETIC_DATABASE_URL") or "sqlite+pysqlite:///:memory:"
+    url = database_url or Settings().secret("synthetic_database_url") or "sqlite+pysqlite:///:memory:"
     engine = create_engine(url, future=True, pool_pre_ping=True)
     with engine.begin() as connection:
         for statement in SCHEMA:

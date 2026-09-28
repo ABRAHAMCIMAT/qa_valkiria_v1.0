@@ -84,7 +84,8 @@ def _normalize_story(data: dict) -> dict:
     return story
 
 
-_INVEST_STATUS = {"yes": "cumple", "si": "cumple", "sí": "cumple", "true": "cumple", "pass": "cumple", "passed": "cumple", "cumple": "cumple",
+# Estados INVEST, no contraseñas (falso positivo de Bandit B105).
+_INVEST_STATUS = {"yes": "cumple", "si": "cumple", "sí": "cumple", "true": "cumple", "pass": "cumple", "passed": "cumple", "cumple": "cumple",  # nosec B105
                   "partial": "parcial", "parcial": "parcial", "no": "no_cumple", "false": "no_cumple", "fail": "no_cumple", "no_cumple": "no_cumple", "no cumple": "no_cumple"}
 
 

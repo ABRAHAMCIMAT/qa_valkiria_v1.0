@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+
 class InMemoryExecutionStore:
     def __init__(self):
         self.items = {}

@@ -35,7 +35,7 @@ class OpenAICompatibleLLM:
                 content = body["choices"][0]["message"]["content"]
                 result = content if isinstance(content, dict) else json.loads(content)
                 if not isinstance(result, dict):
-                    raise ValueError("La respuesta del LLM no es un objeto JSON.")
+                    raise TypeError("La respuesta del LLM no es un objeto JSON.")
                 return result
         except httpx.TimeoutException as exc:
             event(self.logger, 40, "timeout_llm", model=self.model_name)

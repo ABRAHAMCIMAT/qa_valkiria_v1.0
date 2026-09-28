@@ -51,7 +51,8 @@ def _error_response(code: str, message: str, trace_id: str, status_code: int, de
     return JSONResponse(status_code=status_code, content=body, headers={"X-Trace-Id": trace_id})
 
 
-FRONTEND_INDEX = Path(__file__).resolve().parents[3] / "frontend" / "index.html"
+# Ubicación del frontend al ejecutar desde el repositorio; en la imagen Docker se define VALKIRIA_FRONTEND_DIR.
+DEFAULT_FRONTEND_DIR = Path(__file__).resolve().parents[3] / "frontend"
 
 
 class AgentExecutionReq(BaseModel):
@@ -118,8 +119,8 @@ def create_app():
     batches = InMemoryBatchStore()
     executions = InMemoryExecutionStore()
     reports = InMemoryReportStore()
-    llm = OpenAICompatibleLLM(settings.llm_base_url, settings.llm_model, settings.llm_api_key)
-    database_executor = build_synthetic_executor(settings.db_profile, settings.synthetic_database_url) if settings.mode == "synthetic" else None
+    llm = OpenAICompatibleLLM(settings.llm_base_url, settings.llm_model, settings.secret("llm_api_key"))
+    database_executor = build_synthetic_executor(settings.db_profile, settings.secret("synthetic_database_url")) if settings.mode == "synthetic" else None
     automation_runner = PlaywrightRunner(settings.automation_headless, settings.automation_timeout_seconds) if settings.automation_execute and settings.automation_runner == "playwright" else None
     service = ValkiriaService(llm, audit, metrics, stories)
     orchestrator = MultiAgentOrchestrator(build_default_registry(llm=llm, audit=audit, metrics=metrics, database_executor=database_executor, automation_runner=automation_runner, synthetic_app_base_url=settings.synthetic_app_base_url), audit=audit, metrics=metrics)
@@ -313,12 +314,14 @@ def create_app():
         return {"metrics": [m.model_dump(mode="json") for m in metrics.items]}
 
     # Sirve el frontend desde el mismo origen que la API: sin puertos ni CORS adicionales.
-    if FRONTEND_INDEX.is_file():
+    frontend_dir = Path(settings.frontend_dir) if settings.frontend_dir else DEFAULT_FRONTEND_DIR
+    frontend_index = frontend_dir / "index.html"
+    if frontend_index.is_file():
         @app.get("/", include_in_schema=False)
         async def frontend():
-            return FileResponse(FRONTEND_INDEX)
+            return FileResponse(frontend_index)
 
-        if (FRONTEND_INDEX.parent / "assets").is_dir():
-            app.mount("/assets", StaticFiles(directory=FRONTEND_INDEX.parent / "assets"), name="assets")
+        if (frontend_dir / "assets").is_dir():
+            app.mount("/assets", StaticFiles(directory=frontend_dir / "assets"), name="assets")
 
     return app
