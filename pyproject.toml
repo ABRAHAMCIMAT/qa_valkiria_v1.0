@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "valkiria"
+version = "0.5.0"
+description = "Auditable multiagent QA platform with synthetic E2E and LLMOps lifecycle"
+requires-python = ">=3.11"
+dependencies = ["fastapi>=0.115,<1", "pydantic>=2.8,<3", "uvicorn>=0.30,<1", "httpx>=0.27,<1", "structlog>=24,<26", "sqlalchemy>=2.0,<3"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<9", "ruff>=0.6,<1", "mypy>=1.11,<2", "bandit>=1.7,<2"]
+synthetic = ["psycopg[binary]>=3.2,<4", "testcontainers[postgres]>=4.9,<5"]
+e2e = ["playwright>=1.50,<2"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
