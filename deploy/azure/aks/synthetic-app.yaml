@@ -1,0 +1,88 @@
+# Aplicación Nissan sintética. Un initContainer aplica la migración y los datos sintéticos
+# (ConfigMap "synthetic-db-init" creado por deploy.sh) solo si la base está vacía.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: synthetic-app
+  labels: {app: synthetic-app}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: synthetic-app}}
+  template:
+    metadata:
+      labels:
+        app: synthetic-app
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: valkiria-api
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      initContainers:
+        - name: migrate-synthetic-db
+          image: postgres:16-alpine
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              DSN="postgresql://${VALKIRIA_SYNTHETIC_DATABASE_URL#postgresql+psycopg://}"
+              until pg_isready -d "$DSN"; do sleep 3; done
+              if [ -z "$(psql "$DSN" -tAc "SELECT to_regclass('public.vehicles')")" ]; then
+                psql "$DSN" -v ON_ERROR_STOP=1 -f /sql/V1__create_schema.sql -f /sql/V2__seed_nissan_data.sql
+              fi
+          envFrom:
+            - secretRef: {name: valkiria-secrets}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: sql, mountPath: /sql, readOnly: true}
+            - {name: keyvault, mountPath: /mnt/secrets, readOnly: true}
+      containers:
+        - name: synthetic-app
+          image: ghcr.io/abrahamcimat/qa_valkiria_v1.0:0.5.0
+          imagePullPolicy: IfNotPresent
+          command: ["uvicorn", "valkiria.synthetic_app.app:create_synthetic_app", "--factory", "--host", "0.0.0.0", "--port", "8090"]
+          ports: [{name: http, containerPort: 8090}]
+          envFrom:
+            - secretRef: {name: valkiria-secrets}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /health, port: http}
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: keyvault, mountPath: /mnt/secrets, readOnly: true}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: sql
+          configMap: {name: synthetic-db-init}
+        - name: keyvault
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes: {secretProviderClass: valkiria-keyvault}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: synthetic-app
+  labels: {app: synthetic-app}
+spec:
+  selector: {app: synthetic-app}
+  ports:
+    - {name: http, port: 8090, targetPort: http}

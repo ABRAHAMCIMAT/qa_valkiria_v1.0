@@ -4,14 +4,15 @@
 > **Contrastado con:** el código del repositorio `qa_valkiria_v1.0` (commit `79f64ae`, paquete 0.5.0).
 > **Historias mejoradas:** [Épica e historias INVEST v3.0](epica-historias-invest.md).
 > **Fecha:** 2026-09-28.
+> **Decisión posterior (2026-09-28):** Azure es la única plataforma y el modelo es Llama 3.2 Instruct. El conflicto T1 queda resuelto y las historias mejoradas ya no mencionan AWS.
 
 ## Resumen
 
 Las historias están bien encaminadas: tienen el formato "Como / quiero / para", reglas de negocio explícitas, criterios Dado/Cuando/Entonces y un principio sólido de validación humana. Aun así, **ninguna está lista para desarrollo tal como está escrita**. Los problemas se concentran en cinco puntos:
 
-1. **Conflictos entre reglas.** La épica exige desplegar todo en AWS, pero HU-006 y HU-007 dependen de Azure DevOps y Azure Key Vault. HU-004 exige una HU aprobada, y HU-009 permite generar desde matrices en borrador.
+1. **Conflictos entre reglas.** La épica exigía desplegar todo en AWS, pero HU-006 y HU-007 dependen de Azure DevOps y Azure Key Vault (**resuelto**: se adoptó Azure como única plataforma). HU-004 exige una HU aprobada, y HU-009 permite generar desde matrices en borrador.
 2. **Términos sin definir.** Las fases A, C y D; "requerimiento amplio"; "herramienta de gestión de pruebas"; los SLA; el canal de notificación; "coincide exactamente".
-3. **Historias demasiado grandes.** HU-004, HU-005 y HU-008 mezclan generación, integración externa y ejecución. HU-008 incluye aprovisionar infraestructura en AWS.
+3. **Historias demasiado grandes.** HU-004, HU-005 y HU-008 mezclan generación, integración externa y ejecución. HU-008 incluye aprovisionar infraestructura de ejecución.
 4. **Criterios difíciles de probar.** Faltan umbrales numéricos, casos negativos y el comportamiento ante errores del LLM o de sistemas externos.
 5. **Numeración distinta a la del repositorio.** El código y la documentación actual usan otra numeración (ver [Mapeo de numeración](#mapeo-de-numeración)).
 
@@ -21,7 +22,7 @@ Del lado de la implementación: **HU-002, HU-003A, HU-003B, HU-004, HU-005 y HU-
 
 | # | Hallazgo | Impacto | Recomendación |
 |---|---|---|---|
-| T1 | **"Todo en AWS" frente a Azure DevOps y Key Vault.** La regla 1 de la épica prohíbe componentes fuera de AWS; HU-006 y HU-007 integran Azure DevOps (SaaS) y HU-007 pide Azure Key Vault. | Las historias no se pueden cumplir a la vez tal como están escritas. | Reformular: "Los componentes **propios** de la plataforma se despliegan en AWS; las integraciones con SaaS de terceros (Azure DevOps) son consumidores externos y sus credenciales viven en AWS Secrets Manager". En HU-007, usar Variable Groups **o** una service connection a AWS, sin exigir Key Vault. |
+| T1 | **Plataforma de nube contradictoria.** La regla 1 de la épica exigía AWS, mientras HU-006 y HU-007 integran Azure DevOps y Azure Key Vault. | Las historias no se podían cumplir a la vez. | **Resuelto (2026-09-28):** Azure es la única plataforma (AKS, ACR, Key Vault, PostgreSQL Flexible Server, Azure DevOps, Azure Load Testing) y el modelo es Llama 3.2 Instruct autoalojado en AKS. |
 | T2 | **Fases A, C y D sin definir.** Se usan en HU-002, HU-004 y HU-005, pero no hay glosario. | Cada lector interpreta el flujo a su manera. | Añadir a la épica un glosario de fases: A (análisis/refinamiento), B (creación), C (planificación y riesgo), D (diseño de pruebas), E (automatización). |
 | T3 | **La numeración empieza en HU-002 y usa sufijos A/B.** No existe HU-001 y el criterio de cierre dice "HU-002 a HU-009", lo que deja ambiguo si HU-003A/B cuentan por separado. | Confusión en seguimiento y reportes. | Mantener la numeración del plan como fuente de verdad y declarar en la épica la lista cerrada: HU-002, HU-003A, HU-003B, HU-004 a HU-009. |
 | T4 | **La trazabilidad y la validación humana son reglas de la épica sin historia propia.** No hay criterios que las verifiquen ni quién las construye. | Riesgo de que cada HU lo resuelva distinto, o de que nadie lo haga. | Convertirlas en **requisitos transversales (RT)** con criterios propios y exigirlas en la Definición de Terminado de cada HU. |
@@ -165,11 +166,10 @@ La evaluación INVEST corresponde a la **historia original del PDF**: ✅ cumple
 
 - **Problemas:**
   - El título dice "generación" cuando es publicación y sincronización.
-  - Choca con la regla "todo en AWS" (T1).
   - "Coincide exactamente" no dice qué campos ni en qué formato.
   - No contempla que alguien edite el Work Item directamente en Azure DevOps, lo que genera conflictos.
   - No indica dónde se guarda el token.
-- **Mejora:** campos obligatorios definidos (título, descripción, criterios y reglas en HTML, etiquetas); ante un conflicto no se sobrescribe, se muestran las diferencias; token en AWS Secrets Manager; reintentos con límite; clave de idempotencia persistida.
+- **Mejora:** campos obligatorios definidos (título, descripción, criterios y reglas en HTML, etiquetas); ante un conflicto no se sobrescribe, se muestran las diferencias; token en Azure Key Vault; reintentos con límite; clave de idempotencia persistida.
 - **Estado en el código:** ❌ No disponible para el usuario. `build_azure_work_item` (vista previa, crear o actualizar, clave de idempotencia) y un adaptador de referencia existen, pero **sin endpoint ni llamada real** a Azure DevOps, y el mapeo solo cubre título y descripción.
 
 ### HU-007 — YAML de pipelines
@@ -181,13 +181,12 @@ La evaluación INVEST corresponde a la **historia original del PDF**: ✅ cumple
 - **Problemas:**
   - No dice cómo se valida la sintaxis.
   - El placeholder podría reportar pruebas en verde sin haber ejecutado nada, lo que daría falsa confianza.
-  - Key Vault choca con AWS (T1).
   - No indica cómo se entrega al repositorio (HU-009 usa pull request).
 - **Mejora:**
   - La validación se hace con el esquema de Azure Pipelines y, si hay conexión, con una ejecución de vista previa.
   - El placeholder **marca la etapa como omitida con advertencia visible**, nunca como aprobada.
   - La entrega es por pull request, igual que HU-009.
-  - Los secretos van por Variable Group o service connection.
+  - Los secretos van por Variable Group vinculado a Key Vault o service connection con Workload Identity federation.
 - **Estado en el código:** ❌ No disponible para el usuario. `generate_pipeline_yaml` genera build, test y publicación con placeholder y Variable Group, pero **sin endpoint ni validación de sintaxis**; además, el placeholder usa `echo`, que siempre termina en verde.
 
 ### HU-008 — Performance
@@ -197,12 +196,12 @@ La evaluación INVEST corresponde a la **historia original del PDF**: ✅ cumple
 | ✅ | ✅ | ✅ | ❌ | ❌ | 🟡 |
 
 - **Problemas:**
-  - Es la historia más grande del plan: generación de escenarios y scripts, aprovisionamiento aislado en AWS, ejecución y reporte contra SLA.
+  - Es la historia más grande del plan: generación de escenarios y scripts, aprovisionamiento aislado, ejecución y reporte contra SLA.
   - No dice dónde se definen los SLA.
   - No fija límites de costo, duración ni usuarios.
   - No restringe los entornos objetivo: una prueba de carga contra producción sería un incidente.
 - **Mejora:**
-  - Se divide en **HU-008A** (generar escenario y script, sin ejecutar) y **HU-008B** (ejecutar en AWS con límites y reportar contra SLA).
+  - Se divide en **HU-008A** (generar escenario y script, sin ejecutar) y **HU-008B** (ejecutar en Azure Load Testing con límites y reportar contra SLA). Como Azure Load Testing ejecuta JMeter y Locust, k6 sale del alcance.
   - Solo contra entornos autorizados que no sean de producción.
   - Límites por defecto: 30 minutos, 500 usuarios virtuales y un presupuesto por ejecución, con destrucción automática de recursos.
 - **Estado en el código:** ❌ No implementada. `performance_plan` solo valida la herramienta y los parámetros; no genera scripts, no ejecuta y no reporta. El adaptador de nube devuelve `planned`.
@@ -231,7 +230,7 @@ La evaluación INVEST corresponde a la **historia original del PDF**: ✅ cumple
 
 | Prioridad | Acción | Responsable sugerido |
 |---|---|---|
-| 1 | Resolver T1 (AWS frente a Azure) antes de refinar HU-006, HU-007 y HU-008. | PO + Arquitectura |
+| 1 | ~~Resolver T1 (plataforma de nube).~~ Resuelto: Azure como única plataforma. | PO + Arquitectura |
 | 2 | Corregir en el código el prompt de la matriz (máximo 12 y 1–3 por criterio), porque contradice HU-004 en la implementación ya existente. | Desarrollo |
 | 3 | Aprobar el glosario de fases, los requisitos transversales RT-01 a RT-06 y la Definición de Terminado. | PO + QA Lead |
 | 4 | Implementar la persistencia de evaluaciones y versiones (base de HU-002, HU-003A y HU-004): hoy todo vive en memoria. | Desarrollo |
@@ -250,8 +249,8 @@ La evaluación INVEST corresponde a la **historia original del PDF**: ✅ cumple
 | HU-005 | 🟡 Parcial | Escala, lote, notificación y ajuste auditado |
 | HU-006 | ❌ No disponible | Endpoint e integración real con Azure DevOps |
 | HU-007 | ❌ No disponible | Endpoint, validación de sintaxis y placeholder honesto |
-| HU-008 | ❌ No implementada | Generación de scripts, ejecución en AWS y reporte contra SLA |
+| HU-008 | ❌ No implementada | Generación de scripts, ejecución en Azure Load Testing y reporte contra SLA |
 | HU-009 | 🟡 Avanzada | Pull request real y controles de calidad del código |
 | HU-011 | ✅ Implementada | Fuera del plan; persistencia y motores adicionales |
 
-Además, en toda la plataforma faltan **persistencia durable** (el estado vive en memoria), **autenticación y roles** (el actor llega en una cabecera sin verificar) y **despliegue en AWS** (hoy se despliega con Docker y Kubernetes genéricos). Son condiciones para cerrar la épica según su propia regla 1.
+Además, en toda la plataforma faltan **persistencia durable** (el estado vive en memoria), **autenticación y roles** (el actor llega en una cabecera sin verificar) y un **despliegue real en Azure**: la infraestructura (Bicep), el overlay de AKS y el pipeline de Azure DevOps ya están en el repositorio y validados, pero aún no se ejecutaron contra una suscripción. Son condiciones para cerrar la épica según su propia regla 1.

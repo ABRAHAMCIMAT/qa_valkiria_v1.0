@@ -119,7 +119,7 @@ def create_app():
     batches = InMemoryBatchStore()
     executions = InMemoryExecutionStore()
     reports = InMemoryReportStore()
-    llm = OpenAICompatibleLLM(settings.llm_base_url, settings.llm_model, settings.secret("llm_api_key"))
+    llm = OpenAICompatibleLLM(settings.llm_base_url, settings.llm_model, settings.secret("llm_api_key"), auth_header=settings.llm_auth_header)
     database_executor = build_synthetic_executor(settings.db_profile, settings.secret("synthetic_database_url")) if settings.mode == "synthetic" else None
     automation_runner = PlaywrightRunner(settings.automation_headless, settings.automation_timeout_seconds) if settings.automation_execute and settings.automation_runner == "playwright" else None
     service = ValkiriaService(llm, audit, metrics, stories)

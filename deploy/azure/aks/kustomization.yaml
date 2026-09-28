@@ -1,0 +1,19 @@
+# Overlay de AKS: API de la base + app sintética + Llama 3.2 Instruct (Ollama) + secretos de Key Vault + Ingress.
+# No aplicar directamente: deploy/azure/deploy.sh reemplaza los valores __TOKEN__ con las salidas de Bicep.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: valkiria
+resources:
+  - namespace.yaml
+  - ../../kubernetes
+  - serviceaccount.yaml
+  - secretproviderclass.yaml
+  - ollama.yaml
+  - synthetic-app.yaml
+  - ingress.yaml
+images:
+  - name: ghcr.io/abrahamcimat/qa_valkiria_v1.0
+    newName: __ACR_LOGIN_SERVER__/valkiria
+    newTag: __IMAGE_TAG__
+patches:
+  - path: api-patch.yaml

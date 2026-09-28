@@ -1,0 +1,70 @@
+# Llama 3.2 Instruct (3B, cuantizado q4_K_M) servido por Ollama con API compatible con OpenAI.
+# El modelo se descarga una vez al volumen persistente; los reinicios posteriores lo reutilizan.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ollama-models
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: managed-csi
+  resources:
+    requests: {storage: 20Gi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama
+  labels: {app: ollama}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: ollama}}
+  template:
+    metadata: {labels: {app: ollama}}
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: ollama
+          image: ollama/ollama:0.32.11
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              ollama serve &
+              until ollama list >/dev/null 2>&1; do sleep 1; done
+              ollama pull "$MODEL"
+              wait
+          env:
+            - {name: MODEL, value: llama3.2:3b-instruct-q4_K_M}
+            - {name: OLLAMA_KEEP_ALIVE, value: 24h}
+          ports: [{name: http, containerPort: 11434}]
+          readinessProbe:
+            # Listo solo cuando el modelo ya está descargado.
+            exec: {command: ["/bin/sh", "-c", "ollama list | grep -q \"$MODEL\""]}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 60
+          livenessProbe:
+            httpGet: {path: /api/version, port: http}
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: "2", memory: 4Gi}
+            limits: {cpu: "3", memory: 6Gi}
+          volumeMounts:
+            - {name: models, mountPath: /root/.ollama}
+      volumes:
+        - name: models
+          persistentVolumeClaim: {claimName: ollama-models}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama
+  labels: {app: ollama}
+spec:
+  selector: {app: ollama}
+  ports:
+    - {name: http, port: 11434, targetPort: http}

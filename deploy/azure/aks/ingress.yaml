@@ -1,0 +1,17 @@
+# Ingress con el complemento de enrutamiento de aplicaciones de AKS (NGINX administrado).
+# Sin host: responde en la IP pública del controlador. Pendiente: dominio y certificado TLS desde Key Vault.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: valkiria-api
+spec:
+  ingressClassName: webapprouting.kubernetes.azure.com
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: valkiria-api
+                port: {name: http}

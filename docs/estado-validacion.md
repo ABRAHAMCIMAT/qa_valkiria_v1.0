@@ -25,6 +25,10 @@ Ejecutada en macOS con Python 3.12.2 y Docker 29.8.1, con el código ya integrad
 | Mutación vía API a PostgreSQL | `POST /v1/database/scripts/execute` (`UPDATE ... LIMIT 1` con rollback) | `completed`, 1 fila afectada, reporte generado, datos intactos |
 | Workflow de CI | `actionlint .github/workflows/ci.yml` | Válido |
 | Kubernetes | `kubeconform -strict deploy/kubernetes/deployment.yaml` | 3 recursos válidos |
+| Bicep de Azure | `bicep build` y `bicep lint deploy/azure/bicep/main.bicep` | Compila sin errores ni advertencias; el archivo de parámetros también compila |
+| Overlay de AKS | `kubectl kustomize deploy/azure/aks` + `kubeconform` (con esquemas de CRD) | 12 recursos válidos, incluido `SecretProviderClass`; el renderizado con valores de prueba no deja marcadores `__...__` |
+| Pipeline de Azure DevOps | `check-jsonschema` contra el esquema oficial de Azure Pipelines | Válido; se comprobó que el validador detecta un error introducido a propósito |
+| Llama 3.2 Instruct | Proveedor contra Ollama local (`llama3.2:3b-instruct-q4_K_M`) | JSON válido en unos 7,5 s |
 | Kubernetes local (kind) | `deploy/kind/up.sh` | 9 recursos aplicados; API, app sintética y PostgreSQL listos en unos 75 s desde cero, con 0 reinicios; `/health`, consultas, mutaciones, bloqueo de SQL peligroso y orquestador con LLM verificados en `localhost:8080` |
 
 ## Cambios realizados
@@ -53,10 +57,10 @@ Pendiente relacionado: los `INSERT ... VALUES` siguen requiriendo la palabra `LI
 
 ## Pendientes de producción
 
-1. **Publicar la imagen**: el CI la construye pero no la publica. Falta un trabajo que haga push a GHCR con etiqueta por versión y digest, y referenciar el digest en Kubernetes.
+1. **Ejecutar en una suscripción de Azure**: la infraestructura (Bicep), el overlay de AKS y `azure-pipelines.yml` están validados sin conexión, pero no se ejecutaron contra una suscripción real. Falta crear la service connection `valkiria-azure` y el environment `valkiria-qa` en Azure DevOps y hacer el primer despliegue.
 2. **Persistencia**: auditoría, métricas, historias, lotes y reportes viven en memoria y se pierden al reiniciar. En Kubernetes, con 2 réplicas, cada pod tiene su propio estado. Falta un almacenamiento durable.
-3. **Secretos**: `VALKIRIA_LLM_API_KEY` y la URL de base de datos deben venir de un gestor de secretos (Secret de Kubernetes o proveedor externo). La contraseña `valkiria_synthetic_only` es exclusiva del entorno efímero.
-4. **LLM en contenedores**: Compose usa el Ollama del host o el perfil `llm`. Sin un modelo disponible, los endpoints que dependen del LLM responden 503 (error controlado).
+3. **Red privada**: en Azure, PostgreSQL acepta conexiones de servicios de Azure por firewall y el Ingress es HTTP público. Para producción faltan integración con VNet o Private Endpoint, dominio y TLS (certificado en Key Vault). Los secretos ya vienen de Key Vault con Workload Identity.
+4. **Capacidad del LLM**: Llama 3.2 3B en CPU responde en segundos por petición y Ollama atiende las peticiones de forma secuencial. Con más usuarios hará falta un nodo con GPU o más réplicas. Sin modelo disponible, los endpoints que dependen del LLM fallan de forma controlada.
 5. **Playwright en la imagen**: la imagen no incluye navegadores; `VALKIRIA_AUTOMATION_EXECUTE=true` requiere una imagen con Chromium.
 6. **Formato**: `ruff format --check` reformatearía unos 40 archivos, sobre todo líneas largas. No se aplicó para no mezclar un cambio masivo de estilo con correcciones funcionales, y no se exige en el CI.
-7. **Kubernetes**: el manifiesto se desplegó y verificó en un clúster kind local (`deploy/kind/`), pero no en un clúster real. Faltan Ingress/TLS, NetworkPolicy, HPA y PodDisruptionBudget según la plataforma de destino.
+7. **Kubernetes**: el manifiesto base se desplegó y verificó en kind (`deploy/kind/`); el overlay de AKS está validado pero no desplegado. Faltan TLS, NetworkPolicy, HPA y PodDisruptionBudget.

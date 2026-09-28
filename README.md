@@ -103,9 +103,10 @@ synthetic_db/          Migración de esquema y datos Nissan ficticios
 deploy/docker/         Dockerfile multi-etapa
 deploy/kubernetes/     ConfigMap, Deployment y Service (base de kustomize)
 deploy/kind/           Overlay y scripts para probar en Kubernetes local (kind)
-deploy/terraform/      Guía de destinos en la nube
+deploy/azure/          Bicep (infraestructura), overlay de AKS y deploy.sh para Azure
 docs/                  Documentación en español
-.github/workflows/     Pipeline de CI
+.github/workflows/     CI en GitHub Actions
+azure-pipelines.yml    CI/CD en Azure DevOps: validación, E2E, imagen en ACR y despliegue en AKS
 docker-compose.synthetic.yml   Entorno de desarrollo completo
 .env.example           Plantilla única de configuración
 ```
@@ -127,7 +128,7 @@ VALKIRIA_RELEASE_MODE=preview
 VALKIRIA_DIRECT_COMMIT=false
 VALKIRIA_PR_REQUIRED=true
 VALKIRIA_LLM_BASE_URL=http://localhost:11434/v1
-VALKIRIA_LLM_MODEL=qwen2.5:7b
+VALKIRIA_LLM_MODEL=llama3.2:3b-instruct-q4_K_M
 ```
 
 Playwright real solo se habilita explícitamente con `VALKIRIA_AUTOMATION_EXECUTE=true`. `VALKIRIA_ENVIRONMENT=production` no arranca sin `VALKIRIA_ALLOW_PRODUCTION=true`. Detalle completo en [Despliegue](docs/despliegue.md#configuración).
@@ -156,7 +157,7 @@ Para Ollama local:
 
 ```bash
 ollama serve
-ollama pull qwen2.5:7b
+ollama pull llama3.2:3b-instruct-q4_K_M
 ```
 
 ## Entorno Docker completo
@@ -170,6 +171,20 @@ docker compose -f docker-compose.synthetic.yml down -v   # apagar y borrar datos
 ```
 
 La imagen se construye desde `deploy/docker/Dockerfile`, corre como usuario no root (`uid 10001`) con sistema de archivos de solo lectura e incluye healthcheck. Dentro de Compose, la API usa el LLM del host (`host.docker.internal:11434`); para usar el contenedor de Ollama añade `--profile llm` y `VALKIRIA_DOCKER_LLM_BASE_URL=http://ollama:11434/v1`. Kubernetes y CI se describen en [Despliegue](docs/despliegue.md).
+
+## Despliegue en Azure
+
+Azure es la única plataforma de despliegue y el modelo es **Llama 3.2 Instruct**, autoalojado en AKS con Ollama.
+
+```bash
+az group create -n rg-valkiria-qa -l eastus2
+export VALKIRIA_PG_ADMIN_PASSWORD='<contraseña-fuerte>'
+az deployment group create -g rg-valkiria-qa -n main -f deploy/azure/bicep/main.bicep -p deploy/azure/bicep/main.bicepparam
+az acr build -r <acrName> -t valkiria:0.5.0 -f deploy/docker/Dockerfile .
+RESOURCE_GROUP=rg-valkiria-qa IMAGE_TAG=0.5.0 deploy/azure/deploy.sh
+```
+
+Bicep crea ACR, AKS (Workload Identity, Key Vault CSI y app routing), Key Vault, PostgreSQL Flexible Server y Log Analytics. En Azure DevOps, `azure-pipelines.yml` automatiza validación, E2E, imagen y despliegue con aprobación manual. Detalle en [Despliegue](docs/despliegue.md#azure-plataforma-de-destino).
 
 ## Kubernetes local para pruebas
 

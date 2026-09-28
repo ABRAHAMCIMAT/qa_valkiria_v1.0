@@ -1,0 +1,37 @@
+# Ajustes de AKS sobre la base: identidad, secretos de Key Vault y LLM interno.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: valkiria-config
+data:
+  VALKIRIA_LLM_BASE_URL: http://ollama:11434/v1
+  VALKIRIA_LLM_MODEL: llama3.2:3b-instruct-q4_K_M
+  VALKIRIA_SYNTHETIC_APP_BASE_URL: http://synthetic-app:8090
+  # Reemplazar por el dominio real cuando se configure DNS y TLS.
+  VALKIRIA_ALLOWED_ORIGINS: http://localhost:8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: valkiria-api
+spec:
+  template:
+    metadata:
+      labels:
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: valkiria-api
+      automountServiceAccountToken: true
+      containers:
+        - name: api
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: keyvault, mountPath: /mnt/secrets, readOnly: true}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: keyvault
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes: {secretProviderClass: valkiria-keyvault}

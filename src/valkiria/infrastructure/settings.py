@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -25,8 +25,10 @@ class Settings(BaseSettings):
     )
 
     llm_base_url: str = "http://localhost:11434/v1"
-    llm_model: str = "qwen2.5:7b"
+    llm_model: str = "llama3.2:3b-instruct-q4_K_M"
     llm_api_key: SecretStr | None = None
+    # Azure OpenAI con llave: "api-key". Ollama, vLLM, OpenAI o Azure OpenAI con Entra ID: "authorization".
+    llm_auth_header: Literal["authorization", "api-key"] = "authorization"
     allowed_origins: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["http://localhost:3000"])
     mode: str = "synthetic"
     environment: str = "qa"

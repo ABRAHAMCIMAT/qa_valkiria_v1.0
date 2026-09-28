@@ -1,8 +1,6 @@
-# Imagen construida por deploy/docker/Dockerfile. Publicarla antes de aplicar:
-#   docker build -f deploy/docker/Dockerfile -t ghcr.io/abrahamcimat/qa_valkiria_v1.0:0.5.0 .
-#   docker push ghcr.io/abrahamcimat/qa_valkiria_v1.0:0.5.0
-# Secretos esperados (opcionales): Secret "valkiria-secrets" con
-#   VALKIRIA_SYNTHETIC_DATABASE_URL y VALKIRIA_LLM_API_KEY.
+# Base de kustomize de la API. No se aplica sola: la usan los overlays
+#   deploy/azure/aks (AKS: imagen desde ACR y secretos desde Key Vault) y deploy/kind (pruebas locales).
+# Secretos esperados: Secret "valkiria-secrets" con VALKIRIA_SYNTHETIC_DATABASE_URL (y opcionalmente VALKIRIA_LLM_API_KEY).
 apiVersion: v1
 kind: ConfigMap
 metadata:

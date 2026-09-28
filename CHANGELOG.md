@@ -2,6 +2,22 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/).
 
+## 2026-09-28 — Azure como única plataforma y Llama 3.2 Instruct
+
+### Añadido
+- `deploy/azure/bicep/main.bicep` y `main.bicepparam`: Log Analytics, ACR, AKS (Workload Identity, Key Vault CSI, app routing, Container Insights), identidad administrada con credencial federada, Key Vault y PostgreSQL Flexible Server 16.
+- `deploy/azure/aks/`: overlay de AKS con imagen desde ACR, secretos desde Key Vault (`SecretProviderClass`), Ollama con Llama 3.2 Instruct y volumen persistente, app sintética con migración automática e Ingress.
+- `deploy/azure/deploy.sh` y `azure-pipelines.yml` (Validate, E2E, Build con `az acr build`, DeployQA con aprobación).
+- `VALKIRIA_LLM_AUTH_HEADER` (`authorization` o `api-key`) para endpoints compatibles con OpenAI que usan llave `api-key`, con pruebas del proveedor.
+
+### Cambiado
+- Modelo por defecto: `llama3.2:3b-instruct-q4_K_M` (Llama 3.2 Instruct).
+- Historias v3.0 y revisión: se eliminó AWS. La épica exige Azure; HU-006 y HU-007 usan Key Vault; HU-008B se ejecuta en Azure Load Testing (JMeter o Locust).
+- Adaptador de nubes: solo Azure.
+
+### Eliminado
+- `deploy/terraform/` (guía multinube que incluía AWS).
+
 ## 2026-09-28 — Revisión del Plan de Mejora Valkiria 2026
 
 ### Añadido

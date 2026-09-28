@@ -17,15 +17,24 @@ class LLMProviderError(RuntimeError):
 
 
 class OpenAICompatibleLLM:
-    def __init__(self, base_url: str, model_name: str, api_key: str | None = None, timeout_seconds: float = 90):
+    def __init__(self, base_url: str, model_name: str, api_key: str | None = None, timeout_seconds: float = 90, auth_header: str = "authorization"):
         self.base_url = base_url.rstrip("/")
         self.model_name = model_name
         self.api_key = api_key
+        # "authorization" (Bearer) sirve para Ollama, vLLM y OpenAI; Azure OpenAI con llave usa "api-key".
+        self.auth_header = auth_header.lower()
         self.timeout_seconds = timeout_seconds
         self.logger = get_logger("valkiria.llm")
 
+    def _auth_headers(self) -> dict[str, str]:
+        if not self.api_key:
+            return {}
+        if self.auth_header == "api-key":
+            return {"api-key": self.api_key}
+        return {"Authorization": f"Bearer {self.api_key}"}
+
     async def generate_json(self, *, system: str, user: str, schema: dict[str, Any]) -> dict[str, Any]:
-        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+        headers = self._auth_headers()
         payload = {"model": self.model_name, "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}], "temperature": 0.1, "response_format": {"type": "json_object"}}
         try:
             async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:

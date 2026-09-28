@@ -6,12 +6,13 @@ Las integraciones externas son adaptadores detrás de puertos. El dominio y los 
 
 ## LLM
 
-Se soporta un contrato compatible con OpenAI. El endpoint recomendado para desarrollo es Ollama local con `qwen2.5:7b`; también puede utilizarse un servidor compatible con vLLM, TGI, Llama u otro proveedor autorizado.
+El modelo es **Llama 3.2 Instruct** (`llama3.2:3b-instruct-q4_K_M`), servido por Ollama con una API compatible con OpenAI: localmente en desarrollo y dentro de AKS en Azure. El proveedor también admite endpoints administrados compatibles con OpenAI que usen el encabezado `api-key` (`VALKIRIA_LLM_AUTH_HEADER=api-key`).
 
 ```text
 VALKIRIA_LLM_BASE_URL
 VALKIRIA_LLM_MODEL
 VALKIRIA_LLM_API_KEY
+VALKIRIA_LLM_AUTH_HEADER
 ```
 
 El proveedor aplica timeout, valida JSON y devuelve errores tipados. `VALKIRIA_LLM_API_KEY` se maneja como `SecretStr` y puede quedar vacía para Ollama local. En Compose, la API usa `host.docker.internal:11434` o el servicio `ollama` del perfil `llm`. Las claves permanecen fuera del repositorio.

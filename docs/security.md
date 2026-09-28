@@ -54,7 +54,8 @@ Bandit no reporta hallazgos. Hay cinco supresiones justificadas en el código: t
 ## Checklist
 
 - [ ] OIDC/JWT conectado.
-- [ ] Gestor de secretos configurado.
+- [x] Gestor de secretos: Azure Key Vault con Workload Identity y Secret Store CSI (`deploy/azure/`).
+- [ ] Red privada en Azure (VNet o Private Endpoint para PostgreSQL y Key Vault) y TLS en el Ingress.
 - [ ] CORS restringido a orígenes reales (`VALKIRIA_ALLOWED_ORIGINS`).
 - [ ] Imagen publicada por digest en un registro controlado.
 - [ ] Persistencia durable y migraciones.

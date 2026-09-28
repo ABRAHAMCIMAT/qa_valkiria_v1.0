@@ -1,0 +1,149 @@
+# Pipeline de Azure DevOps: validación, pruebas, paquete, imagen en ACR y despliegue en AKS.
+# Requisitos en el proyecto de Azure DevOps:
+#   - Service connection de Azure Resource Manager (Workload Identity federation) llamada "valkiria-azure".
+#   - Environment "valkiria-qa" con aprobación manual (validación humana antes de desplegar).
+#   - Infraestructura creada con deploy/azure/bicep/main.bicep en el grupo de recursos de la variable.
+
+trigger:
+  branches:
+    include: [main]
+pr:
+  branches:
+    include: [main]
+
+variables:
+  pythonVersion: '3.12'
+  azureServiceConnection: 'valkiria-azure'
+  resourceGroup: 'rg-valkiria-qa'
+  bicepDeploymentName: 'main'
+  imageRepository: 'valkiria'
+  imageTag: '0.5.0-$(Build.BuildId)'
+  PIP_DISABLE_PIP_VERSION_CHECK: '1'
+
+stages:
+  - stage: Validate
+    displayName: Lint, seguridad y pruebas unitarias
+    jobs:
+      - job: Validate
+        pool:
+          vmImage: ubuntu-24.04
+        steps:
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: $(pythonVersion)
+          - script: pip install -e '.[dev]'
+            displayName: Instalar dependencias
+          - script: ruff check src tests
+            displayName: Ruff
+          - script: bandit -q -c pyproject.toml -r src
+            displayName: Bandit
+          - script: pytest -q --ignore=tests/e2e --junitxml=test-results/unit.xml
+            displayName: Pruebas unitarias
+          - task: PublishTestResults@2
+            condition: succeededOrFailed()
+            inputs:
+              testResultsFormat: JUnit
+              testResultsFiles: test-results/unit.xml
+              testRunTitle: Unitarias
+
+  - stage: E2E
+    displayName: E2E sintética contra PostgreSQL
+    dependsOn: Validate
+    jobs:
+      - job: E2E
+        pool:
+          vmImage: ubuntu-24.04
+        services:
+          postgres: postgres
+        variables:
+          VALKIRIA_SYNTHETIC_DATABASE_URL: postgresql+psycopg://valkiria:valkiria_synthetic_only@localhost:5432/nissan_synthetic
+          RUN_SYNTHETIC_E2E: '1'
+        steps:
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: $(pythonVersion)
+          - script: pip install -e '.[dev,synthetic]'
+            displayName: Instalar dependencias
+          - script: |
+              for i in $(seq 1 30); do pg_isready -h localhost -U valkiria -d nissan_synthetic && break; sleep 2; done
+              PGPASSWORD=valkiria_synthetic_only psql -v ON_ERROR_STOP=1 -h localhost -U valkiria -d nissan_synthetic -f synthetic_db/migrations/V1__create_schema.sql
+              PGPASSWORD=valkiria_synthetic_only psql -v ON_ERROR_STOP=1 -h localhost -U valkiria -d nissan_synthetic -f synthetic_db/fixtures/V2__seed_nissan_data.sql
+            displayName: Aplicar migraciones y datos sintéticos
+          - script: pytest -v -rs tests/e2e --junitxml=test-results/e2e.xml
+            displayName: E2E
+          - task: PublishTestResults@2
+            condition: succeededOrFailed()
+            inputs:
+              testResultsFormat: JUnit
+              testResultsFiles: test-results/e2e.xml
+              testRunTitle: E2E sintética
+
+  - stage: Build
+    displayName: Paquete e imagen en ACR
+    dependsOn: [Validate, E2E]
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - job: Build
+        pool:
+          vmImage: ubuntu-24.04
+        steps:
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: $(pythonVersion)
+          - script: pip install "build>=1.2,<2" && python -m build
+            displayName: Wheel y sdist
+          - publish: dist
+            artifact: dist
+          - task: AzureCLI@2
+            displayName: Construir y publicar la imagen en ACR
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                ACR_NAME=$(az deployment group show -g $(resourceGroup) -n $(bicepDeploymentName) --query properties.outputs.acrName.value -o tsv)
+                az acr build -r "$ACR_NAME" -t "$(imageRepository):$(imageTag)" -f deploy/docker/Dockerfile .
+
+  - stage: DeployQA
+    displayName: Despliegue en AKS (QA)
+    dependsOn: Build
+    condition: succeeded()
+    jobs:
+      - deployment: DeployQA
+        environment: valkiria-qa
+        pool:
+          vmImage: ubuntu-24.04
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                - task: AzureCLI@2
+                  displayName: Aplicar manifiestos en AKS
+                  inputs:
+                    azureSubscription: $(azureServiceConnection)
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      export RESOURCE_GROUP=$(resourceGroup) DEPLOYMENT_NAME=$(bicepDeploymentName) IMAGE_TAG=$(imageTag)
+                      deploy/azure/deploy.sh
+                - task: AzureCLI@2
+                  displayName: Probar /health
+                  inputs:
+                    azureSubscription: $(azureServiceConnection)
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      IP=$(kubectl -n valkiria get ingress valkiria-api -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+                      for i in $(seq 1 30); do curl -fsS "http://$IP/health" && exit 0; sleep 10; done
+                      exit 1
+
+resources:
+  containers:
+    - container: postgres
+      image: postgres:16-alpine
+      ports: ['5432:5432']
+      env:
+        POSTGRES_USER: valkiria
+        POSTGRES_PASSWORD: valkiria_synthetic_only
+        POSTGRES_DB: nissan_synthetic

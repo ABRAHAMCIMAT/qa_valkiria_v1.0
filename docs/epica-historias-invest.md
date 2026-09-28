@@ -2,6 +2,7 @@
 
 > **Versión documental:** 3.0 (2026-09-28). Mejora del *Plan de Mejora Valkiria 2026* según la [revisión de historias](revision-historias-2026.md).
 > Sustituye a la v2.0, que usaba otra numeración (ver [mapeo](revision-historias-2026.md#mapeo-de-numeración)).
+> **Plataforma:** Microsoft Azure es la única plataforma de despliegue (decisión del 2026-09-28). **Modelo LLM:** Llama 3.2 Instruct.
 > **Estimaciones y prioridades:** sugeridas; el equipo debe validarlas en refinamiento.
 
 ## Épica
@@ -11,10 +12,11 @@
 **Descripción:** agrupa las capacidades del agente a lo largo del ciclo de vida de una HU (fases A a E), adoptables de forma progresiva e independiente y sin requerir conocimientos avanzados de IA.
 
 **Reglas de negocio:**
-1. Los componentes **propios** de la plataforma (API, agentes, modelos, datos, ejecución de pruebas) se despliegan exclusivamente en AWS, con cifrado en tránsito (TLS 1.2 o superior) y en reposo (KMS). Las integraciones con SaaS de terceros (Azure DevOps) se consumen como servicios externos; sus credenciales viven en AWS Secrets Manager.
-2. Ninguna funcionalidad reemplaza la validación humana final en decisiones críticas: publicar, aprobar, integrar código o ejecutar sobre recursos con costo (ver RT-02).
+1. Todos los componentes (API, agentes, modelo LLM, datos, ejecución de pruebas y CI/CD) se despliegan exclusivamente en Microsoft Azure: AKS, Azure Container Registry, Azure Key Vault, Azure Database for PostgreSQL y Azure DevOps, con cifrado en tránsito (TLS 1.2 o superior) y en reposo (claves administradas por Azure o en Key Vault). Los secretos viven en Azure Key Vault y los pods acceden con Workload Identity, sin credenciales en el clúster.
+2. Ninguna funcionalidad reemplaza la validación humana final en decisiones críticas: publicar, aprobar, integrar código o ejecutar sobre recursos de Azure con costo (ver RT-02).
 3. Toda acción relevante queda registrada con usuario, fecha, resultado, artefacto y versión (ver RT-01).
 4. Cada capacidad se adopta de forma progresiva e independiente: una HU puede habilitarse por proyecto sin requerir las demás, salvo las dependencias declaradas.
+5. El modelo es Llama 3.2 Instruct, autoalojado en AKS con Ollama y expuesto con una API compatible con OpenAI. Los datos de las HU no salen del tenant de Azure de la organización.
 
 **Alcance cerrado:** HU-002, HU-003A, HU-003B, HU-004, HU-004B, HU-005, HU-006, HU-007, HU-008A, HU-008B, HU-009 y HU-011, más los requisitos transversales RT-01 a RT-06.
 
@@ -28,7 +30,7 @@
 | Casos generados aceptados sin edición mayor | ≥ 70 % |
 | Defectos escapados a producción en HU con matriz del agente | Sin aumento frente a la línea base |
 
-**Criterio de cierre:** la épica se completa cuando todas las HU del alcance cumplen sus criterios y la Definición de Terminado, están desplegadas en AWS y los KPIs tienen al menos un ciclo de medición.
+**Criterio de cierre:** la épica se completa cuando todas las HU del alcance cumplen sus criterios y la Definición de Terminado, están desplegadas en Azure y los KPIs tienen al menos un ciclo de medición.
 
 ### Glosario de fases
 
@@ -56,18 +58,18 @@ RT-01..RT-06 aplican a todas
 | ID | Requisito | Criterio verificable |
 |---|---|---|
 | RT-01 | **Trazabilidad y auditoría** | Cada acción registra `trace_id`, usuario autenticado, fecha UTC, acción, artefacto, versión y resultado. El registro es inmutable, se conserva 12 meses y se puede consultar por HU y por usuario. |
-| RT-02 | **Validación humana** | Publicar, aprobar, abrir un pull request o ejecutar en AWS requiere confirmación explícita de un rol autorizado sobre la **versión exacta** (hash) mostrada. Sin confirmación, solo hay vista previa. |
+| RT-02 | **Validación humana** | Publicar, aprobar, abrir un pull request o ejecutar sobre recursos de Azure requiere confirmación explícita de un rol autorizado sobre la **versión exacta** (hash) mostrada. Sin confirmación, solo hay vista previa. |
 | RT-03 | **Roles y permisos** | Autenticación corporativa (SSO/OIDC). Roles: PO, QA Engineer, QA Lead, DevOps y Administrador. Cada HU declara qué rol puede ejecutar cada acción. |
 | RT-04 | **Disponibilidad del LLM y degradación** | Si el modelo no responde en 60 s o devuelve una respuesta inválida, el usuario recibe un error claro con `trace_id`, conserva sus datos y puede reintentar. No se inventan resultados. |
-| RT-05 | **Datos sensibles** | No se envían al modelo credenciales ni datos personales reales. Los secretos se gestionan en AWS Secrets Manager y nunca aparecen en logs, prompts ni artefactos. |
-| RT-06 | **Gobierno del modelo** | Cada artefacto generado registra modelo, versión del prompt y fecha. Los cambios de modelo o de prompt se prueban con un conjunto de HU de referencia antes de activarse. |
+| RT-05 | **Datos sensibles** | No se envían al modelo credenciales ni datos personales reales. Los secretos se gestionan en Azure Key Vault y nunca aparecen en logs, prompts ni artefactos. |
+| RT-06 | **Gobierno del modelo** | Modelo de referencia: Llama 3.2 Instruct. Cada artefacto generado registra modelo, versión del prompt y fecha. Los cambios de modelo o de prompt se prueban con un conjunto de HU de referencia antes de activarse. |
 
 ## Definición de Terminado (aplica a cada HU)
 
 - Criterios de aceptación automatizados (unitarios y de contrato) y en verde en CI.
 - RT-01 a RT-05 verificados para la funcionalidad.
 - Artefactos generados por IA marcados como "borrador generado por IA" hasta su aprobación.
-- Documentación en español actualizada; desplegado en el entorno de pruebas de AWS.
+- Documentación en español actualizada; desplegado en el entorno de QA de Azure (AKS) mediante el pipeline de Azure DevOps.
 - Sin hallazgos críticos de seguridad (análisis estático y de dependencias).
 
 ---
@@ -210,7 +212,7 @@ RT-01..RT-06 aplican a todas
 **Fase:** B · **Prioridad:** Should · **Estimación:** 8 pts · **Depende de:** HU-003A o HU-003B, RT-02 y RT-05 · **Roles:** PO (publicar), Administrador (configurar el mapeo).
 
 **Reglas de negocio:**
-1. La conexión usa un token con permisos limitados al proyecto (lectura y escritura de Work Items), guardado en AWS Secrets Manager y rotado según la política de seguridad.
+1. La conexión usa un token con permisos limitados al proyecto (lectura y escritura de Work Items), guardado en Azure Key Vault y rotado según la política de seguridad. Se prefiere una identidad administrada o service principal con acceso a Azure DevOps cuando el tenant lo permita.
 2. El mapeo de campos es configurable por proyecto y proceso (Agile, Scrum o CMMI). Campos mínimos: título, descripción, criterios de aceptación, reglas de negocio (en HTML) y la etiqueta `valkiria`.
 3. Idempotencia: se guarda el ID del Work Item asociado a la HU. Una nueva publicación actualiza ese Work Item; nunca crea un duplicado.
 4. El PO confirma sobre una vista previa que muestra exactamente los campos que se enviarán (RT-02).
@@ -236,13 +238,13 @@ RT-01..RT-06 aplican a todas
 1. El YAML incluye como mínimo las etapas de build, test y publicación de resultados (JUnit).
 2. La sintaxis se valida contra el esquema de Azure Pipelines antes de entregar y, si hay conexión al proyecto, con una ejecución de vista previa (sin ejecutar el pipeline).
 3. Sin scripts existentes, la etapa de test usa un placeholder documentado que **se marca como omitido con una advertencia visible**; nunca reporta pruebas aprobadas.
-4. Las variables sensibles se referencian mediante Variable Groups o service connections a AWS; nunca en texto plano.
+4. Las variables sensibles se referencian mediante Variable Groups vinculados a Azure Key Vault o service connections de Azure Resource Manager con Workload Identity federation; nunca en texto plano.
 5. El YAML se entrega como pull request para revisión de DevOps; sin commit automático.
 
 **Criterios de aceptación:**
 - **Dado** que no existen scripts, **cuando** se solicita el pipeline, **entonces** se genera un YAML válido cuya etapa de test aparece como omitida con advertencia.
 - **Dado** scripts existentes de HU-009, **cuando** se solicita el pipeline, **entonces** la etapa de test los referencia por su ruta.
-- **Dado** una variable sensible, **cuando** se genera el YAML, **entonces** se referencia por Variable Group y no aparece su valor.
+- **Dado** una variable sensible, **cuando** se genera el YAML, **entonces** se referencia por un Variable Group vinculado a Key Vault y no aparece su valor.
 - **Dado** un YAML con error de sintaxis, **cuando** se valida, **entonces** no se entrega y se indica la línea y el motivo.
 - **Dado** un YAML válido, **cuando** DevOps lo revisa, **entonces** puede editarlo en el pull request antes de integrarlo.
 
@@ -258,7 +260,7 @@ RT-01..RT-06 aplican a todas
 1. Hay dos disparadores independientes: la solicitud manual del QA o la sugerencia de HU-005 por riesgo alto. Ninguno es requisito del otro.
 2. Cada escenario define tipo (carga, estrés o picos), usuarios virtuales, rampa, duración, transacciones objetivo y métricas con su SLA (p95 de latencia, tasa de error, throughput).
 3. Los SLA provienen de la HU o del proyecto; si no existen, el QA los ingresa antes de generar.
-4. La herramienta (JMeter, k6 o Locust) se elige por proyecto y el script se genera para esa herramienta.
+4. La herramienta (JMeter o Locust, soportadas por Azure Load Testing) se elige por proyecto y el script se genera para esa herramienta.
 5. El script se entrega por pull request y no se ejecuta en esta HU.
 
 **Criterios de aceptación:**
@@ -266,20 +268,20 @@ RT-01..RT-06 aplican a todas
 - **Dado** una HU de riesgo alto, **cuando** HU-005 termina, **entonces** se sugiere (sin forzar) crear la prueba.
 - **Dado** que no hay SLA definidos, **cuando** se solicita la prueba, **entonces** se piden antes de generar.
 
-## HU-008B — Ejecución de pruebas de performance en AWS
+## HU-008B — Ejecución de pruebas de performance en Azure
 
-**Título:** Como QA Engineer, quiero ejecutar la prueba de performance en recursos aislados de AWS y recibir un reporte contra SLA, para decidir la liberación con datos.
+**Título:** Como QA Engineer, quiero ejecutar la prueba de performance en Azure Load Testing con recursos aislados y recibir un reporte contra SLA, para decidir la liberación con datos.
 
 **Fase:** E · **Prioridad:** Could · **Estimación:** 13 pts · **Depende de:** HU-008A y RT-02 · **Roles:** QA Engineer (solicitar), DevOps (aprobar la ejecución).
 
 **Reglas de negocio:**
 1. Solo contra entornos autorizados que no sean de producción, registrados por proyecto.
-2. Recursos aislados (VPC y cuenta de pruebas) con límites por defecto: 30 minutos, 500 usuarios virtuales y un presupuesto máximo por ejecución. Superarlos requiere aprobación de DevOps.
-3. Los recursos se destruyen automáticamente al terminar, incluso si la prueba falla.
-4. El reporte compara cada métrica contra su SLA con resultado de aprobado o fallido, e incluye el costo estimado.
+2. Recursos aislados (recurso de Azure Load Testing en un grupo de recursos dedicado; red privada hacia el entorno objetivo) con límites por defecto: 30 minutos, 500 usuarios virtuales y un presupuesto máximo por ejecución. Superarlos requiere aprobación de DevOps.
+3. Los recursos temporales de la ejecución se liberan al terminar, incluso si la prueba falla; el costo queda asociado al grupo de recursos dedicado.
+4. El reporte compara cada métrica contra su SLA (criterios de fallo de Azure Load Testing) con resultado de aprobado o fallido, e incluye el costo estimado.
 
 **Criterios de aceptación:**
-- **Dado** un escenario aprobado dentro de los límites, **cuando** se ejecuta, **entonces** se aprovisiona en AWS aislado y se destruye al terminar.
+- **Dado** un escenario aprobado dentro de los límites, **cuando** se ejecuta, **entonces** se ejecuta en Azure Load Testing de forma aislada y los recursos temporales se liberan al terminar.
 - **Dado** un entorno objetivo de producción, **cuando** se solicita ejecutar, **entonces** se bloquea.
 - **Dado** una ejecución terminada, **cuando** se genera el reporte, **entonces** cada métrica muestra valor, SLA y resultado.
 - **Dado** un escenario que excede los límites, **cuando** se solicita ejecutar, **entonces** requiere aprobación de DevOps.
