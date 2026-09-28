@@ -2,7 +2,7 @@
 //   az group create -n rg-valkiria-qa -l eastus2
 //   az deployment group create -g rg-valkiria-qa -f deploy/azure/bicep/main.bicep -p deploy/azure/bicep/main.bicepparam
 // Crea: Log Analytics, Azure Container Registry, AKS (Workload Identity, Key Vault CSI, app routing),
-// identidad administrada para la API, Key Vault y PostgreSQL Flexible Server con la base sintética.
+// identidad administrada para la API, Key Vault y PostgreSQL Flexible Server con la base sintética y la de flujos.
 // El LLM (Llama 3.2 Instruct) corre con Ollama dentro de AKS (deploy/azure/aks).
 
 targetScope = 'resourceGroup'
@@ -39,6 +39,7 @@ var acrName = take('${prefix}acr${suffix}', 50)
 var keyVaultName = take('${prefix}-kv-${suffix}', 24)
 var postgresName = '${prefix}-pg-${suffix}'
 var databaseName = 'nissan_synthetic'
+var workflowDatabaseName = 'valkiria_workflows'
 var tags = {
   application: 'valkiria'
   environment: 'qa'
@@ -193,6 +194,16 @@ resource database 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2024-08-0
   }
 }
 
+// Estado persistente de los flujos por historia (dependencias, versiones y aprobaciones).
+resource workflowDatabase 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2024-08-01' = {
+  parent: postgres
+  name: workflowDatabaseName
+  properties: {
+    charset: 'UTF8'
+    collation: 'en_US.utf8'
+  }
+}
+
 // Acceso desde servicios de Azure (incluido AKS). Pendiente de producción: red privada (VNet integration).
 resource postgresAllowAzure 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@2024-08-01' = {
   parent: postgres
@@ -209,6 +220,14 @@ resource databaseUrlSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
   name: 'synthetic-database-url'
   properties: {
     value: 'postgresql+psycopg://${postgresAdminLogin}:${uriComponent(postgresAdminPassword)}@${postgres.properties.fullyQualifiedDomainName}:5432/${databaseName}?sslmode=require'
+  }
+}
+
+resource workflowDatabaseUrlSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+  parent: keyVault
+  name: 'workflow-database-url'
+  properties: {
+    value: 'postgresql+psycopg://${postgresAdminLogin}:${uriComponent(postgresAdminPassword)}@${postgres.properties.fullyQualifiedDomainName}:5432/${workflowDatabaseName}?sslmode=require'
   }
 }
 

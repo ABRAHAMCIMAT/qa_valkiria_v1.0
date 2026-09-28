@@ -47,7 +47,8 @@ INVEST_SYSTEM = (
 
 MATRIX_SYSTEM = (
     "Eres analista de QA senior. Diseña en español una matriz de pruebas para la historia: casos positivos, negativos y de borde, "
-    "entre 1 y 3 por criterio de aceptación y máximo 12 en total. type solo puede ser positive, negative o edge; priority: high, medium o low. "
+    "con al menos un caso positive, uno negative y uno edge por cada criterio de aceptación, y máximo 30 casos en total (HU-004). "
+    "Cada caso debe usar el id exacto de su criterio en criterion_id. type solo puede ser positive, negative o edge; priority: high, medium o low. "
     'Responde únicamente con JSON: {"cases": [{"id": "TC-01", "criterion_id": "AC-01", "scenario": "...", "preconditions": ["..."], '
     '"steps": ["..."], "data": {}, "expected_result": "...", "priority": "high", "type": "positive"}]}'
 )

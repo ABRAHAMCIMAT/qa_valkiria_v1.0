@@ -238,6 +238,21 @@ La evaluación INVEST corresponde a la **historia original del PDF**: ✅ cumple
 | 6 | Conectar a la API las funciones que ya existen (`build_test_matrix`, riesgo determinista, `generate_pipeline_yaml`, `build_azure_work_item`) o eliminarlas para no aparentar funcionalidad. | Desarrollo |
 | 7 | Incorporar HU-011 (BD sintética) al plan y alinear la numeración del repo. | PO |
 
+## Avance posterior: flujo por historia (2026-09-28)
+
+El [flujo de agentes por historia](flujo-historias.md) conecta las capacidades con sus dependencias y cierra varias brechas:
+
+| HU | Qué se resolvió | Qué sigue pendiente |
+|---|---|---|
+| HU-002 | Evaluación validada (6 criterios, sugerencia en los que no se cumplen), aprobación con decisión por sugerencia e historial de versiones | Consulta del historial por HU en la interfaz |
+| HU-003A | Nueva versión a partir de las sugerencias aprobadas; se omite si no hay ninguna | Vista de diferencias en la interfaz |
+| HU-004 | Prompt corregido (mínimo positivo/negativo/borde por criterio, máximo 30), validación, reparación, completado determinista, límite de 10 criterios, edición y aprobación | CSV y trazabilidad hasta el defecto (HU-004B) |
+| HU-005 | Se ejecuta solo con la HU aprobada; el riesgo alto sugiere HU-008A | Escala 1–5 explícita, lote por sprint, notificación y ajuste justificado |
+| HU-006 | Vista previa aprobable con título, descripción, criterios y reglas | Llamada real a Azure DevOps |
+| HU-007 | Pipeline disponible en el flujo; el placeholder queda con advertencia y se regenera cuando aparecen scripts | Validación de sintaxis contra el servicio y entrega por PR |
+| HU-008A | Diseño con datos obligatorios (usuarios, duración, SLA) y herramientas de Azure Load Testing | Generación del script JMeter o Locust |
+| HU-009 | División automática en lotes de 15 como máximo; marca de matriz en borrador; se regenera si la matriz cambia | PR real, lint y detección de secretos |
+
 ## Estado de implementación (resumen)
 
 | HU | Estado | Brecha principal |

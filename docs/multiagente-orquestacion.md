@@ -46,3 +46,7 @@ Approval devuelve `waiting_approval` sin publicar. Release prepara preview con `
 ## Seguridad
 
 El router solo selecciona agentes registrados. Los agentes no manejan credenciales. Las mutaciones externas deben ser secuenciales e idempotentes. La explicación pública contiene decisiones y evidencia, no razonamiento interno confidencial.
+
+## Flujo por historia
+
+Este orquestador resuelve una petición aislada. Para coordinar varias HU sobre una misma historia (dependencias, versiones, aprobaciones y reanudación entre peticiones) usa el [flujo de agentes por historia](flujo-historias.md).

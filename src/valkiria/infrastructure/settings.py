@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     db_profile: str = "synthetic_postgresql"
     db_engine: str = "postgresql"
     synthetic_database_url: SecretStr | None = None
+    # Persistencia de los flujos por historia (SQLite o PostgreSQL). Vacío: en memoria.
+    workflow_database_url: SecretStr | None = None
     automation_runner: str = "playwright"
     automation_execute: bool = False
     automation_headless: bool = True
@@ -54,7 +56,7 @@ class Settings(BaseSettings):
             return [origin.strip() for origin in value.split(",") if origin.strip()]
         return value
 
-    @field_validator("llm_api_key", "synthetic_database_url", mode="before")
+    @field_validator("llm_api_key", "synthetic_database_url", "workflow_database_url", mode="before")
     @classmethod
     def _empty_as_none(cls, value: object) -> object:
         return None if isinstance(value, str) and not value.strip() else value

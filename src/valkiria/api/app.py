@@ -42,6 +42,14 @@ from valkiria.infrastructure.playwright_runner import PlaywrightRunner
 from valkiria.infrastructure.settings import Settings
 from valkiria.infrastructure.synthetic_database import build_synthetic_executor
 from valkiria.providers.openai_compatible import LLMProviderError, OpenAICompatibleLLM
+from valkiria.workflow.engine import (
+    WorkflowConflict,
+    WorkflowEngine,
+    WorkflowNotFound,
+    view,
+)
+from valkiria.workflow.graph import CAPABILITIES
+from valkiria.workflow.state import ConcurrentModification, build_workflow_store
 
 
 def _error_response(code: str, message: str, trace_id: str, status_code: int, details: dict[str, Any] | None = None) -> JSONResponse:
@@ -108,7 +116,32 @@ class ToolSelectionReq(BaseModel):
     preferred_tool: str | None = None
 
 
-def create_app():
+class WorkflowStartReq(BaseModel):
+    request: str | None = Field(default=None, min_length=3, max_length=20000)
+    goals: list[str] | None = Field(default=None, max_length=len(CAPABILITIES))
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
+class WorkflowApprovalReq(BaseModel):
+    artifact: str
+    version: int = Field(ge=1)
+    content_hash: str | None = None
+    decision: Literal["approved", "rejected"]
+    comment: str = Field(default="", max_length=2000)
+    suggestions: dict[str, Literal["approved", "rejected"]] | None = None
+
+
+class WorkflowEditReq(BaseModel):
+    payload: dict[str, Any]
+
+
+def _check_goals(goals: list[str] | None) -> None:
+    unknown = [goal for goal in goals or [] if goal not in CAPABILITIES]
+    if unknown:
+        raise HTTPException(422, "unknown_goals:" + ",".join(unknown))
+
+
+def create_app(llm=None):
     configure_logging()
     logger = get_logger("valkiria.api")
     app = FastAPI(title="Valkiria API", version="0.5.0", description="API auditable para la plataforma multiagente de QA")
@@ -119,10 +152,11 @@ def create_app():
     batches = InMemoryBatchStore()
     executions = InMemoryExecutionStore()
     reports = InMemoryReportStore()
-    llm = OpenAICompatibleLLM(settings.llm_base_url, settings.llm_model, settings.secret("llm_api_key"), auth_header=settings.llm_auth_header)
+    llm = llm or OpenAICompatibleLLM(settings.llm_base_url, settings.llm_model, settings.secret("llm_api_key"), auth_header=settings.llm_auth_header)
     database_executor = build_synthetic_executor(settings.db_profile, settings.secret("synthetic_database_url")) if settings.mode == "synthetic" else None
     automation_runner = PlaywrightRunner(settings.automation_headless, settings.automation_timeout_seconds) if settings.automation_execute and settings.automation_runner == "playwright" else None
     service = ValkiriaService(llm, audit, metrics, stories)
+    workflows = WorkflowEngine(build_workflow_store(settings.secret("workflow_database_url")), service)
     orchestrator = MultiAgentOrchestrator(build_default_registry(llm=llm, audit=audit, metrics=metrics, database_executor=database_executor, automation_runner=automation_runner, synthetic_app_base_url=settings.synthetic_app_base_url), audit=audit, metrics=metrics)
 
     app.add_middleware(CORSMiddleware, allow_origins=settings.allowed_origins, allow_credentials=False, allow_methods=["GET", "POST"], allow_headers=["Content-Type", "X-Actor", "X-Trace-Id"])
@@ -139,6 +173,18 @@ def create_app():
         response.headers["X-Trace-Id"] = trace_id
         event(logger, logging.INFO, "solicitud_completada", trace_id=trace_id, method=request.method, path=request.url.path, status=response.status_code)
         return response
+
+    @app.exception_handler(WorkflowNotFound)
+    async def workflow_not_found_handler(request: Request, exc: WorkflowNotFound):
+        return _error_response("workflow_not_found", "El flujo no existe.", getattr(request.state, "trace_id", str(uuid4())), 404)
+
+    @app.exception_handler(WorkflowConflict)
+    async def workflow_conflict_handler(request: Request, exc: WorkflowConflict):
+        return _error_response("workflow_conflict", str(exc), getattr(request.state, "trace_id", str(uuid4())), 409)
+
+    @app.exception_handler(ConcurrentModification)
+    async def workflow_concurrency_handler(request: Request, exc: ConcurrentModification):
+        return _error_response("workflow_concurrent_modification", "Otro proceso actualizó el flujo; vuelve a consultarlo.", getattr(request.state, "trace_id", str(uuid4())), 409)
 
     @app.exception_handler(ApplicationError)
     async def application_error_handler(request: Request, exc: ApplicationError):
@@ -304,6 +350,41 @@ def create_app():
             media_type=report["media_type"],
             headers={"Content-Disposition": f'attachment; filename="{report["filename"]}"'},
         )
+
+    @app.get("/v1/workflows/capabilities")
+    async def workflow_capabilities():
+        return {"capabilities": [{"key": c.key, "hu": c.hu, "title": c.title, "requires": [{"artifact": r.artifact, "approved": r.approved} for r in c.requires],
+                                  "optional": list(c.optional), "inputs": list(c.inputs), "approvable": c.approvable, "available": c.available} for c in CAPABILITIES.values()]}
+
+    @app.post("/v1/workflows")
+    async def start_workflow(req: WorkflowStartReq, request: Request, x_actor: str = Header(default="anonymous")):
+        _check_goals(req.goals)
+        if not req.request and not req.goals:
+            raise HTTPException(422, "request_or_goals_required")
+        state, current = await workflows.start(request=req.request, goals=req.goals, params=req.params, actor=x_actor, trace_id=request.state.trace_id)
+        return view(state, current)
+
+    @app.get("/v1/workflows/{workflow_id}")
+    async def get_workflow(workflow_id: str):
+        return view(*await workflows.get(workflow_id))
+
+    @app.post("/v1/workflows/{workflow_id}/requests")
+    async def continue_workflow(workflow_id: str, req: WorkflowStartReq, x_actor: str = Header(default="anonymous")):
+        _check_goals(req.goals)
+        return view(*await workflows.request(workflow_id, request=req.request, goals=req.goals, params=req.params, actor=x_actor))
+
+    @app.post("/v1/workflows/{workflow_id}/approvals")
+    async def approve_workflow_artifact(workflow_id: str, req: WorkflowApprovalReq, x_actor: str = Header(default="anonymous")):
+        return view(*await workflows.approve(workflow_id, artifact=req.artifact, version=req.version, content_hash=req.content_hash, decision=req.decision,
+                                             actor=x_actor, comment=req.comment, suggestions=req.suggestions))
+
+    @app.put("/v1/workflows/{workflow_id}/artifacts/{artifact}")
+    async def edit_workflow_artifact(workflow_id: str, artifact: str, req: WorkflowEditReq, x_actor: str = Header(default="anonymous")):
+        return view(*await workflows.edit(workflow_id, artifact=artifact, payload=req.payload, actor=x_actor))
+
+    @app.post("/v1/workflows/{workflow_id}/resume")
+    async def resume_workflow(workflow_id: str):
+        return view(*await workflows.resume(workflow_id))
 
     @app.get("/v1/audit")
     async def audit_log():

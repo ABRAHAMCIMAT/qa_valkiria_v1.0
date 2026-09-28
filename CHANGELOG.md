@@ -2,6 +2,23 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/).
 
+## 2026-09-28 — Flujo de agentes por historia
+
+### Añadido
+- `src/valkiria/workflow/`, con cinco piezas:
+  - Grafo de capacidades por HU con validación de ciclos.
+  - Planificador determinista con razonamiento explicable.
+  - Estado versionado con `based_on`, aprobaciones por versión y hash exactos, e historial.
+  - Motor con puntos de control, reintentos con espera exponencial, aislamiento de fallos y reanudación.
+  - Validadores de INVEST y de la matriz, con corrección y completado determinista.
+- API `/v1/workflows` (iniciar, continuar, aprobar, editar, reanudar, consultar y capacidades).
+- Persistencia `VALKIRIA_WORKFLOW_DATABASE_URL` (SQLite o PostgreSQL con control optimista); en Azure, base `valkiria_workflows` con la URL en Key Vault.
+- 22 pruebas del flujo y de su API; `docs/flujo-historias.md`.
+
+### Corregido
+- El prompt de la matriz pedía "1 a 3 casos por criterio, máximo 12", contra la regla de HU-004. Ahora exige al menos un caso positivo, uno negativo y uno de borde por criterio, con un máximo de 30.
+- El placeholder del pipeline (HU-007) ya no reporta la etapa de pruebas como aprobada: queda `SucceededWithIssues` con advertencia.
+
 ## 2026-09-28 — Azure como única plataforma y Llama 3.2 Instruct
 
 ### Añadido

@@ -44,7 +44,8 @@ def build_azure_work_item(story: dict[str, Any], *, project: str, field_mapping:
     return {'operation': 'update' if existing_work_item_id else 'create', 'project': project, 'work_item_id': existing_work_item_id, 'fields': fields, 'approval_id': approval_id, 'status': 'preview', 'idempotency_key': f"{project}:{existing_work_item_id or story.get('id')}"}
 
 def generate_pipeline_yaml(*, scripts: list[str] | None = None, variable_group: str = 'valkiria-secrets') -> str:
-    script_lines = scripts or ['echo "Placeholder: add approved test scripts"']
+    # Sin scripts, el placeholder marca la etapa con advertencia (SucceededWithIssues); nunca la reporta como pruebas aprobadas (HU-007).
+    script_lines = scripts or ['echo "##vso[task.logissue type=warning]Placeholder: aún no hay scripts de prueba aprobados (HU-009)"; echo "##vso[task.complete result=SucceededWithIssues;]"']
     safe_scripts = '\n'.join(f'      - script: {script!r}' for script in script_lines)
     return f'''trigger: none\npr: none\nvariables:\n- group: {variable_group}\nstages:\n- stage: Build\n  jobs:\n  - job: Build\n    steps:\n    - script: python -m compileall src\n- stage: Test\n  jobs:\n  - job: Test\n    steps:\n{safe_scripts}\n    - task: PublishTestResults@2\n      inputs:\n        testResultsFormat: JUnit\n        testResultsFiles: '**/test-results.xml'\n- stage: Publish\n  dependsOn: Test\n  jobs:\n  - job: Publish\n    steps:\n    - script: echo "Publication requires DevOps approval"\n'''
 

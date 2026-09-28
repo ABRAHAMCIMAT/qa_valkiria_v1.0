@@ -13,6 +13,7 @@ Incluye un perfil E2E seguro con datos Nissan ficticios, PostgreSQL efímero, ap
 - [Arquitectura](docs/arquitectura.md)
 - [Despliegue: configuración, Docker, Compose, CI y Kubernetes](docs/despliegue.md)
 - [Orquestación multiagente](docs/multiagente-orquestacion.md)
+- [Flujo de agentes por historia (dependencias, aprobaciones y reanudación)](docs/flujo-historias.md)
 - [Ciclo de vida LLMOps](docs/llmops-lifecycle.md)
 - [Quality gates](docs/quality-gates.md)
 - [E2E sintética Nissan](docs/e2e-synthetic.md)
@@ -80,6 +81,13 @@ La respuesta conserva `request_id`, `trace_id`, plan de agentes, artefactos, dec
 | GET | `/v1/reports/{id}` | Consultar reporte de evidencia |
 | GET | `/v1/reports/{id}/download` | Descargar reporte (PDF) |
 | GET | `/v1/audit`, `/v1/metrics` | Auditoría y métricas en memoria |
+| POST | `/v1/workflows` | Flujo por historia: planifica y ejecuta las HU solicitadas respetando dependencias |
+| GET | `/v1/workflows/{id}` | Estado, plan razonado, próximas acciones y artefactos versionados |
+| POST | `/v1/workflows/{id}/requests` | Continuar el flujo con nuevas tareas o datos |
+| POST | `/v1/workflows/{id}/approvals` | Aprobar o rechazar una versión exacta (HU, INVEST con sugerencias, matriz, Work Item) |
+| PUT | `/v1/workflows/{id}/artifacts/{story\|matrix}` | Edición humana con nueva versión |
+| POST | `/v1/workflows/{id}/resume` | Reintentar pasos fallidos |
+| GET | `/v1/workflows/capabilities` | Grafo de dependencias entre HU |
 
 ## Agentes especializados
 

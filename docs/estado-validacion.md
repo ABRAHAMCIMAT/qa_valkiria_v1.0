@@ -15,7 +15,7 @@ Ejecutada en macOS con Python 3.12.2 y Docker 29.8.1, con el código ya integrad
 | Docker daemon | `docker info` | Activo (Docker Desktop 29.8.1) |
 | Ruff | `ruff check src tests` | Sin errores |
 | Bandit | `bandit -q -c pyproject.toml -r src` | Sin hallazgos |
-| Unitarias | `pytest -q --ignore=tests/e2e` | 58 aprobadas (aisladas del `.env` local mediante `tests/conftest.py`) |
+| Unitarias | `pytest -q --ignore=tests/e2e` | 85 aprobadas (aisladas del `.env` local mediante `tests/conftest.py`) |
 | E2E sintética | `RUN_SYNTHETIC_E2E=1 pytest -v tests/e2e` | 5 aprobadas contra PostgreSQL 16 (flujo de la app sintética y mutaciones con límite); repetibles |
 | Paquete | `python -m build` | `valkiria-0.5.0-py3-none-any.whl` y `valkiria-0.5.0.tar.gz`; el wheel se instala y arranca en un entorno limpio |
 | Imagen Docker | `docker build -f deploy/docker/Dockerfile .` | 303 MB, usuario `uid=10001`, healthcheck activo |
@@ -44,6 +44,15 @@ Ejecutada en macOS con Python 3.12.2 y Docker 29.8.1, con el código ya integrad
 - **Integración con HU-010/HU-011**: el commit `135cb56` de otro colaborador tocaba los mismos archivos. Se conservó su versión en los conflictos y se añadió `tests/conftest.py` para que una de sus pruebas no dependiera del `.env` local.
 - **CI con Node 24**: `actions/checkout@v7`, `actions/setup-python@v7`, `actions/upload-artifact@v7` y runner `ubuntu-24.04`.
 - **Kubernetes**: imagen `ghcr.io/abrahamcimat/qa_valkiria_v1.0:0.5.0`, ConfigMap, Secret opcional, sondas de salud, `runAsUser 10001`, seccomp, `/tmp` como `emptyDir` y Service.
+
+## Flujo de agentes por historia
+
+| Verificación | Resultado |
+|---|---|
+| Pruebas del flujo (`tests/test_workflow.py`, `tests/test_workflow_api.py`) | 22 aprobadas: dependencias, aprobación exacta, obsolescencia, sugerencias, reintentos, aislamiento, reanudación, datos faltantes, persistencia tras reinicio y concurrencia |
+| Pruebas de mutación | Desactivar la detección de obsolescencia o los reintentos hace fallar 2 pruebas en cada caso |
+| Persistencia en PostgreSQL real | Guarda, recupera desde otra instancia y detecta escrituras concurrentes |
+| Flujo completo con Llama 3.2 Instruct local | Requerimiento → HU, INVEST, matriz (corregida y completada) y 18 scripts en 2 lotes; el riesgo esperó la aprobación de la HU; estado final `completed` |
 
 ## Resuelto: gates de agentes que comparten fase
 
