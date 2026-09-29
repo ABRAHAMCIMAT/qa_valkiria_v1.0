@@ -5,6 +5,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import create_engine, text
+from sqlalchemy.pool import StaticPool
 
 from valkiria.infrastructure.settings import Settings
 
@@ -29,7 +30,9 @@ def create_synthetic_app(database_url: str | None = None) -> FastAPI:
     """Aplicación bajo prueba; usa PostgreSQL sintético si se configura y SQLite solo como fallback."""
     app = FastAPI(title="Nissan Synthetic App", version="1.1.0")
     url = database_url or Settings().secret("synthetic_database_url") or "sqlite+pysqlite:///:memory:"
-    engine = create_engine(url, future=True, pool_pre_ping=True)
+    # SQLite en memoria: una sola conexión compartida; si no, cada hilo vería una base vacía distinta.
+    options = {"connect_args": {"check_same_thread": False}, "poolclass": StaticPool} if url.startswith("sqlite") and ":memory:" in url else {"pool_pre_ping": True}
+    engine = create_engine(url, future=True, **options)
     with engine.begin() as connection:
         for statement in SCHEMA:
             connection.execute(text(statement))

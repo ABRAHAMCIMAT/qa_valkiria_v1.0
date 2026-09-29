@@ -24,9 +24,11 @@ Action = Literal["reuse", "run", "rerun", "blocked", "needs_input", "skipped", "
 INPUT_QUESTIONS = {
     "requirement": "¿Cuál es el requerimiento en lenguaje natural para redactar la historia?",
     "repository": "¿En qué repositorio se abrirá el pull request con los scripts de automatización?",
+    "framework": "¿Con qué stack automatizo? Web: Playwright o Selenium. API: Playwright, RestAssured o Postman-Newman.",
     "performance_users": "¿Cuántos usuarios virtuales debe simular la prueba de performance?",
     "performance_duration_seconds": "¿Cuánto debe durar la prueba de performance, en segundos?",
     "performance_sla_ms": "¿Cuál es el SLA de latencia p95, en milisegundos?",
+    "performance_type": "¿Qué tipo de prueba? load (carga), stress (estrés), spike (picos) o soak (resistencia).",
     "azure_project": "¿En qué proyecto de Azure DevOps se publicará el Work Item?",
 }
 
@@ -104,6 +106,8 @@ def _stale_dependencies(state: WorkflowState, key: str) -> list[str]:
     stale = [dependency for dependency, version in record.based_on.items() if dependency in declared and dependency in state.artifacts and state.artifacts[dependency].version != version]
     # Una dependencia opcional que apareció después (por ejemplo, scripts para el pipeline) también obliga a regenerar.
     stale += [dependency for dependency in capability.optional if dependency in state.artifacts and dependency not in record.based_on]
+    # Los datos del usuario con que se generó (stack, repositorio, parámetros de performance) también cuentan: si cambiaron, se regenera.
+    stale += [f"dato:{name}" for name, value in record.inputs.items() if name in state.params and state.params[name] != value]
     return stale
 
 
@@ -177,7 +181,9 @@ def plan(state: WorkflowState, goals: list[str], *, exhausted: set[str] | None =
         stale = _stale_dependencies(state, key)
         if stale:
             record = state.artifacts[artifact_of(key)]
-            changes = ", ".join(f"{d} v{record.based_on[d]}→v{state.artifacts[d].version}" if d in record.based_on else f"ahora existe {d} v{state.artifacts[d].version}" for d in stale)
+            changes = ", ".join(f"{d.removeprefix('dato:')}: {record.inputs[d.removeprefix('dato:')]}→{state.params[d.removeprefix('dato:')]}" if d.startswith("dato:")
+                                else f"{d} v{record.based_on[d]}→v{state.artifacts[d].version}" if d in record.based_on else f"ahora existe {d} v{state.artifacts[d].version}"
+                                for d in stale)
             step.action, step.reason = "rerun", f"'{artifact_of(key)}' v{record.version} quedó desactualizado ({changes}); se regenera."
         else:
             step.reason = f"No existe '{artifact_of(key)}'; se genera ({capability.hu})."

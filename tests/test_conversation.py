@@ -6,10 +6,18 @@ from valkiria.api.app import create_app
 from workflow_fakes import STORY, ScriptedLLM
 
 
+def synthetic_app_transport():
+    """La app sintética de Nissan real, en el mismo proceso: la ejecución de HU-010 se valida contra ella, sin simular respuestas."""
+    import httpx
+
+    from valkiria.synthetic_app.app import create_synthetic_app
+    return httpx.ASGITransport(app=create_synthetic_app("sqlite+pysqlite:///:memory:"))
+
+
 class Chat:
     def __init__(self, llm=None):
         self.llm = llm or ScriptedLLM()
-        self.api = TestClient(create_app(llm=self.llm))
+        self.api = TestClient(create_app(llm=self.llm, synthetic_transport=synthetic_app_transport()))
         self.session = None
 
     def say(self, message=None, **action):
@@ -53,15 +61,30 @@ def test_full_journey_through_every_capability():
     assert risk["artifact"]["kind"] == "risk" and "alto" in risk["reply"]
 
     asks_repo = chat.say("Genera los scripts de automatización")
-    assert asks_repo["intent"] == "aclarar" and "repositorio" in asks_repo["reply"]
-    scripts = chat.say("El repositorio es nissan-qa/valkiria-automation")
-    assert scripts["artifact"]["kind"] == "automation" and "pull request" in scripts["reply"]
+    assert asks_repo["intent"] == "aclarar" and "repositorio" in asks_repo["reply"] and "stack" in asks_repo["reply"]
+    framework_choice = next(a for a in asks_repo["actions"] if a["type"] == "input")["params"][0]
+    assert framework_choice["name"] == "framework" and "playwright" in framework_choice["choices"]
+    scripts = chat.say("El repositorio es nissan-qa/valkiria-automation y el stack es RestAssured para la API")
+    assert scripts["artifact"]["kind"] == "automation" and "RestAssured (api)" in scripts["reply"] and "pull request" in scripts["reply"]
+    files = scripts["artifact"]["data"]["batches"][0]["scripts"]
+    assert all(name.endswith("Test.java") for name in files) and all("given().baseUri" in code for code in files.values())
+    early = chat.say("Ejecuta los scripts")
+    assert early["intent"] == "aclarar" and "aprob" in early["reply"]  # HU-010 exige la verificación humana antes
+    assert chat.say(type="approve", artifact="automation")["intent"] == "aprobar"  # verificación humana antes del PR
+    execution = chat.say("Ejecuta los scripts")
+    summary = execution["artifact"]["data"]["summary"]
+    assert execution["artifact"]["kind"] == "execution" and summary["total"] == len(matrix["artifact"]["data"]["cases"]) and execution["artifact"]["data"]["report_id"]
+    assert all(r["status"] is not None for r in execution["artifact"]["data"]["results"])  # llamadas reales a la app sintética
+    report = chat.api.get(f"/v1/reports/{execution['artifact']['data']['report_id']}/download")
+    assert report.status_code == 200 and report.headers["content-type"] == "application/pdf"
 
     pipeline = chat.say("Genera el pipeline de Azure DevOps")
-    assert pipeline["artifact"]["kind"] == "pipeline"
+    assert pipeline["artifact"]["kind"] == "pipeline" and "mvn -B test" in pipeline["artifact"]["data"]["yaml"]
+    chat.say(type="approve", artifact="pipeline")
 
     perf = chat.say("Diseña la prueba de performance con 200 usuarios durante 10 minutos y SLA de 800 ms")
     assert perf["artifact"]["kind"] == "performance_design" and perf["artifact"]["data"]["users"] == 200 and perf["artifact"]["data"]["duration_seconds"] == 600
+    chat.say(type="approve", artifact="performance_design")
 
     work_item = chat.say("Prepara el work item de Azure DevOps en el proyecto NissanQA")
     assert work_item["artifact"]["kind"] == "azure_work_item" and work_item["artifact"]["data"]["project"] == "NissanQA"
@@ -70,7 +93,7 @@ def test_full_journey_through_every_capability():
     done = chat.say("¿Qué sigue?")
     states = {s["key"]: s["state"] for s in done["flow"]["steps"]}
     print("ESTADOS", states, done["reply"])
-    assert all(states[k] == "done" for k in ("story", "invest", "story_revision", "approve_story", "matrix", "approve_matrix", "risk", "automation",
+    assert all(states[k] == "done" for k in ("story", "invest", "story_revision", "approve_story", "matrix", "approve_matrix", "risk", "automation", "execution",
                                              "pipeline", "performance_design", "azure_work_item"))
     assert "completo" in done["reply"]
 
@@ -234,3 +257,78 @@ def test_questions_about_the_current_story_use_the_flow_state():
     llm.assistant_script = [{"accion": "responder", "respuesta": "No sé."}] * 2
     answer = chat.say("¿Cuántos casos tiene la matriz?")
     assert "matriz v1: 6 casos" in answer["reply"] and answer["assistant"]["tools_used"] == ["estado_flujo"]
+
+
+def test_panel_tools_use_the_conversation_context():
+    chat = Chat()
+    chat.say("Necesito que los asesores consulten vehículos disponibles por concesionario")
+    chat.say(type="run", goal="matrix")
+    chat.say("Genera los scripts en RestAssured para la API en el repositorio nissan-qa/api-tests")
+    bd = chat.say(type="tool", name="herramienta_bd")
+    assert "java" in bd["reply"] and "JDBC" in bd["reply"]  # el lenguaje sale del stack elegido (RestAssured → Java)
+    memory = chat.say(type="tool", name="buscar_memoria")
+    assert memory["intent"] == "responder" and memory["resume"]
+    asks = chat.say(type="tool", name="analizar_script_sql")
+    assert asks["actions"][0]["type"] == "tool_input" and asks["actions"][0]["params"][0]["multiline"]
+    analysis = chat.say(type="tool_input", name="analizar_script_sql", params={"script": "DELETE FROM vehicles"})
+    assert "NO es seguro" in analysis["reply"]
+
+
+def test_database_validation_is_derived_from_the_story_and_read_only():
+    chat = Chat()
+    chat.say("Necesito que los asesores consulten vehículos disponibles por concesionario")
+    result = chat.say(type="tool", name="validar_bd")
+    queries = result["artifact"]["data"]["queries"]
+    assert result["artifact"]["kind"] == "database_validation" and queries[0]["status"] == "completed" and queries[0]["row_count"] >= 1
+    assert queries[1]["status"] == "bloqueada"  # la mutación nunca se ejecuta (HU-011)
+    assert queries[0]["report_id"]  # evidencia descargable
+
+
+def test_high_risk_suggests_a_performance_test_without_forcing_it():
+    chat = Chat()
+    chat.say("Necesito que los asesores consulten vehículos disponibles por concesionario")
+    chat.say(type="approve", artifact="story")
+    risk = chat.say("Evalúa el riesgo")
+    assert "sin ser obligatorio" in risk["reply"] and "performance" in risk["reply"]
+    labels = [a["label"] for a in risk["actions"]]
+    assert {"Prueba de carga", "Prueba de estrés", "Prueba de picos"} <= set(labels)
+    stress = next(a for a in risk["actions"] if a["label"] == "Prueba de estrés")
+    designed = chat.say(type="input", goal="performance_design", preset=stress["preset"],
+                        params={"performance_users": 500, "performance_duration_seconds": 300, "performance_sla_ms": 1000})
+    assert designed["artifact"]["data"]["scenario_type"] == "stress"
+
+
+def test_web_scripts_explain_why_they_cannot_run_here_and_offer_an_api_stack():
+    chat = Chat()
+    chat.say("Necesito que los asesores consulten vehículos disponibles por concesionario")
+    chat.say(type="run", goal="matrix")
+    chat.say("Genera los scripts en Playwright para web en el repositorio nissan-qa/web-tests")
+    chat.say(type="approve", artifact="automation")
+    web = chat.say("Ejecuta los scripts")
+    assert web["intent"] == "aclarar" and "sin interfaz web" in web["reply"]
+    regenerate = web["actions"][0]
+    assert regenerate["goal"] == "automation" and regenerate["preset"] == {"platform": "api"}
+    api = chat.say(type="input", goal="automation", preset=regenerate["preset"], params={"framework": "postman-newman"})
+    assert api["artifact"]["data"]["platform"] == "api" and api["artifact"]["version"] == 2
+
+
+def test_story_with_too_many_criteria_offers_a_way_forward():
+    # Caso real en vivo: la HU quedó con 12 criterios y el flujo no ofrecía salida.
+    llm = ScriptedLLM()
+    llm.story = {**STORY, "acceptance_criteria": [{"id": f"AC-{i:02d}", "text": f"Dado {i}, cuando consulto, entonces veo {i}"} for i in range(1, 13)]}
+    chat = Chat(llm)
+    chat.say("Necesito que los asesores consulten vehículos disponibles por concesionario")
+    blocked = chat.say("Genera la matriz de pruebas")
+    assert blocked["intent"] == "aclarar" and "12 criterios" in blocked["reply"]
+    assert [a["type"] for a in blocked["actions"]] == ["edit_story", "new_story"]
+
+
+def test_new_invest_suggestions_are_optional_once_the_story_is_approved():
+    # Caso real en vivo: con la HU aprobada, "¿qué sigue?" volvía a las sugerencias INVEST.
+    chat = Chat()
+    chat.say("Necesito que los asesores consulten vehículos disponibles por concesionario")
+    chat.say(type="run", goal="invest")
+    chat.say(type="approve", artifact="story")
+    nxt = chat.say("¿Qué sigue?")
+    assert nxt["artifact"]["kind"] == "matrix"
+    assert any(a["label"] == "Revisar nuevas sugerencias INVEST (opcional)" for a in nxt["flow"]["next"])

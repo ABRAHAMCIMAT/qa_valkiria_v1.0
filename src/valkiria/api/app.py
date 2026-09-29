@@ -176,7 +176,7 @@ def _check_goals(goals: list[str] | None) -> None:
         raise HTTPException(422, "unknown_goals:" + ",".join(unknown))
 
 
-def create_app(llm=None):
+def create_app(llm=None, synthetic_transport=None):
     configure_logging()
     logger = get_logger("valkiria.api")
     app = FastAPI(title="Valkiria API", version="0.5.0", description="API auditable para la plataforma multiagente de QA")
@@ -191,7 +191,8 @@ def create_app(llm=None):
                                      auth_header=settings.llm_auth_header, token_budget=token_budget)
     database_executor = build_synthetic_executor(settings.db_profile, settings.secret("synthetic_database_url")) if settings.mode == "synthetic" else None
     automation_runner = PlaywrightRunner(settings.automation_headless, settings.automation_timeout_seconds) if settings.automation_execute and settings.automation_runner == "playwright" else None
-    service = ValkiriaService(llm, audit, metrics, stories)
+    service = ValkiriaService(llm, audit, metrics, stories, max_parallel=settings.llm_max_parallel, synthetic_app_base_url=settings.synthetic_app_base_url,
+                              web_runner=automation_runner, synthetic_transport=synthetic_transport)
     memory = build_memory(settings.secret("memory_database_url") or settings.secret("workflow_database_url"), enabled=settings.memory_enabled,
                           max_turns=settings.memory_short_term_turns, ttl_minutes=settings.memory_short_term_ttl_minutes,
                           top_k=settings.memory_long_term_top_k, retention_days=settings.memory_long_term_retention_days)
@@ -200,7 +201,8 @@ def create_app(llm=None):
     assistant = ReasoningAssistant(llm, build_toolbox(service=service, memory=memory, workflows=workflows, synthetic_app_base_url=settings.synthetic_app_base_url))
     workflows.assistant = assistant
     # Agente principal de la conversación: sabe en qué paso del flujo va cada sesión (docs/conversacion.md).
-    conversation = ConversationController(service=service, workflows=workflows, assistant=assistant, memory=memory)
+    conversation = ConversationController(service=service, workflows=workflows, assistant=assistant, memory=memory, database_executor=database_executor,
+                                          reports=reports)
     orchestrator = MultiAgentOrchestrator(build_default_registry(llm=llm, audit=audit, metrics=metrics, database_executor=database_executor, automation_runner=automation_runner,
                                                                  synthetic_app_base_url=settings.synthetic_app_base_url, assistant=assistant), audit=audit, metrics=metrics, memory=memory)
 

@@ -2,6 +2,31 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/).
 
+## 2026-09-29 — Scripts reales, ejecución HU-010, verificación humana y herramientas contextuales
+
+### Añadido
+- `application/script_generation.py`: código real por caso (HU-009) en el stack elegido, con Page Object, datos externalizados y lint, secretos y trazabilidad antes del PR:
+  - Playwright web (TypeScript) y Selenium (Python);
+  - API contra la app sintética: Playwright `request`, RestAssured o Postman-Newman.
+- Paso HU-010 "Ejecución de scripts" en el flujo, tras aprobar los scripts. Ejecuta contra la app sintética las llamadas de los scripts y genera evidencia PDF por caso (`application/automation_runner.py`).
+- Verificación humana de scripts, pipeline y diseño de performance, además de HU, matriz y Work Item. Botones de aprobar y rechazar en cada tarjeta.
+- Sugerencia de prueba de performance (carga, estrés o picos) con riesgo alto o requisitos de rendimiento en la HU (HU-005 regla 6, HU-008A).
+- Herramientas del panel completas y contextuales:
+  - validación de BD derivada de la HU (`SQL_VALIDATION_SYSTEM`, solo lectura, con evidencia);
+  - herramientas de BD y automatización según el stack;
+  - memoria por título de HU;
+  - análisis de SQL con formulario.
+- Un artefacto se regenera si cambian los datos con que se generó (stack, repositorio, parámetros de performance).
+
+### Cambiado
+- Matriz en formato compacto por criterio y en paralelo: el código arma id, tipo, criterio, prioridad y precondiciones, con cobertura garantizada. Con 3 criterios pasa de 57 s a 23 s. `VALKIRIA_LLM_MAX_PARALLEL` y `OLLAMA_NUM_PARALLEL=4` en Compose y AKS. `PROMPT_VERSION = "v3"`.
+- Si el modelo no responde para ningún criterio, la matriz falla con reintento en lugar de entregarse con plantillas (RT-04).
+- El pipeline usa el comando de prueba del stack (`npx playwright test`, `pytest`, `mvn test`, `newman run`).
+
+### Corregido
+- Los scripts eran plantillas sin los pasos del caso.
+- La app sintética con SQLite en memoria perdía las tablas entre hilos.
+
 ## 2026-09-29 — Conductor de la conversación y flujo completo en la interfaz
 
 ### Añadido

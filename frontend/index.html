@@ -161,6 +161,11 @@
   .form input[type=text], .form input[type=number] { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; color: var(--text); padding: 7px 9px; font-family: inherit; font-size: 13px; }
   .form .row { display: flex; gap: 10px; align-items: flex-start; }
   .form .row input[type=checkbox] { margin-top: 3px; }
+  .tool small { max-width: 190px; }
+  details.file { border-top: 1px solid var(--border-soft); }
+  details.file summary { cursor: pointer; padding: 8px 16px; font-size: 12px; color: var(--muted-2); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .form textarea, .form select { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; color: var(--text); padding: 7px 9px; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; }
+  .form textarea { min-height: 90px; resize: vertical; }
   pre.code { background: var(--bg-2); border-top: 1px solid var(--border-soft); padding: 12px 16px; font-size: 11.5px; color: var(--muted-2); overflow-x: auto; max-height: 280px; }
 
   @media (max-width: 900px) { aside { display: none; } .title p, .env-tag, .divider { display: none; } header { padding: 10px 16px; } .thread-inner { padding: 20px 16px 8px; } .input-bar { padding: 12px 16px; } .input-foot span:last-child { display: none; } .turn.user .body { max-width: 90%; } }
@@ -209,8 +214,7 @@
     </div>
     <div class="side-section">
       <h3>Herramientas</h3>
-      <div class="tool"><div><strong>Casos manuales</strong><small>Exportar la matriz a Excel</small></div><button class="btn" onclick="act({type:'export_matrix'}, 'Exporta la matriz a Excel.')">Exportar</button></div>
-      <div class="tool"><div><strong>Validación de base de datos</strong><small>HU-011 · PostgreSQL sintético</small></div><button class="btn" onclick="executeDatabaseDemo()">Ejecutar</button></div>
+      <div id="tools"><p class="session-empty">Cargando herramientas…</p></div>
     </div>
     <div class="side-foot">Los artefactos se generan como borrador. Nada se publica sin aprobación humana y Pull Request. Puedes preguntarme lo que necesites en cualquier paso: lo atiendo y seguimos donde íbamos.</div>
   </aside>
@@ -257,7 +261,7 @@ function scroll(){ thread.scrollTop = thread.scrollHeight; }
 // Todo lo que Valkiria hace sobre una historia, visible desde el inicio (el servidor envía el estado real de cada paso).
 const DEFAULT_STEPS = [['story','HU-003B','Historia de usuario'],['invest','HU-002','Evaluación INVEST'],['story_revision','HU-003A','Nueva versión con sugerencias'],
   ['approve_story','RT-02','Aprobación de la HU'],['matrix','HU-004','Matriz de pruebas'],['approve_matrix','RT-02','Aprobación de la matriz'],['risk','HU-005','Análisis de riesgo'],
-  ['automation','HU-009','Scripts de automatización'],['pipeline','HU-007','Pipeline de Azure DevOps'],['performance_design','HU-008A','Diseño de prueba de performance'],
+  ['automation','HU-009','Scripts de automatización'],['execution','HU-010','Ejecución de scripts (sintética)'],['pipeline','HU-007','Pipeline de Azure DevOps'],['performance_design','HU-008A','Diseño de prueba de performance'],
   ['azure_work_item','HU-006','Work Item de Azure DevOps (vista previa)']].map(([key, hu, label]) => ({key, hu, label, state:'pending', ready:false, why:null}));
 const STEP_STATE = { done: 'Hecho', action: 'Requiere tu decisión', stale: 'Desactualizado', failed: 'Falló', skipped: 'No aplica', pending: '' };
 function renderFlow(){
@@ -275,7 +279,8 @@ function renderFlow(){
   document.getElementById('steps').innerHTML = steps.map(st => {
     const isNext = next && ((next.goal && next.goal === st.key) || (next.type === 'approve' && ('approve_'+next.artifact) === st.key) || (next.type === 'decide_suggestions' && st.key === 'story_revision'));
     const cls = (isNext && st.state !== 'done') ? 'next' : st.state;
-    const sub = st.state === 'done' && st.version ? 'v'+st.version : (STEP_STATE[st.state] || (st.ready ? '' : (st.why || '')));
+    const verify = st.state === 'done' && st.version && st.approved === false && ['automation','pipeline','performance_design','azure_work_item'].includes(st.key);
+    const sub = st.state === 'done' && st.version ? 'v'+st.version+(verify ? ' · pendiente de tu verificación' : st.approved ? ' · aprobado' : '') : (STEP_STATE[st.state] || (st.ready ? '' : (st.why || '')));
     const action = (f?.next || []).find(a => (a.goal === st.key) || (a.type === 'approve' && 'approve_'+a.artifact === st.key) || (a.type === 'decide_suggestions' && st.key === 'story_revision'));
     const btn = action ? '<button class="btn step-btn" data-i="'+(f.next.indexOf(action))+'">'+esc(action.label)+'</button>' : '';
     return '<li class="'+cls+'"><span class="state"></span><div><span>'+esc(st.label)+'</span>'+(sub ? '<span class="sub">'+esc(sub)+'</span>' : '')+btn+'</div><span class="hu">'+esc(st.hu)+'</span></li>';
@@ -323,13 +328,13 @@ async function act(action, label){
 }
 function runSuggested(a){
   if(a.type === 'say'){ input.focus(); return; }
-  if(a.type === 'decide_suggestions' || a.type === 'input' || (a.type === 'approve' && a.confirm_assumptions?.length)){
-    const t = addTurn('assistant', '<p>'+esc(a.type === 'input' ? 'Necesito estos datos para continuar:' : a.type === 'approve' ? 'Antes de aprobar, confirma los supuestos del borrador:' : 'Decide qué sugerencias INVEST aplicar:')+'</p>'+actionForm(a));
+  if(a.type === 'decide_suggestions' || ((a.type === 'input' || a.type === 'tool_input') && a.params?.length) || (a.type === 'approve' && a.confirm_assumptions?.length)){
+    const t = addTurn('assistant', '<p>'+esc(a.type === 'input' || a.type === 'tool_input' ? (a.why ? 'Sugerida porque '+a.why+'. ' : '')+'Necesito estos datos para continuar:' : a.type === 'approve' ? 'Antes de aprobar, confirma los supuestos del borrador:' : 'Decide qué sugerencias INVEST aplicar:')+'</p>'+actionForm(a));
     bindForms(t); return;
   }
   act(a);
 }
-const WORKING = { run: 'Trabajando en el siguiente paso…', approve: 'Registrando la aprobación…', decide_suggestions: 'Aplicando las sugerencias y generando la nueva versión…', edit_story: 'Generando la nueva versión de la historia…', choose_split: 'Redactando la historia…' };
+const WORKING = { tool: 'Usando la herramienta con el contexto de tu historia…', run: 'Trabajando en el siguiente paso…', approve: 'Registrando la aprobación…', decide_suggestions: 'Aplicando las sugerencias y generando la nueva versión…', edit_story: 'Generando la nueva versión de la historia…', choose_split: 'Redactando la historia…' };
 async function exchange(body){
   setBusy(true);
   const working = addWorking((body.action && WORKING[body.action.type]) || (state.flow?.story ? 'Revisando tu mensaje con el flujo en contexto…' : 'Analizando el requerimiento…'));
@@ -365,9 +370,9 @@ function bindForms(root){
     if(a.type === 'decide_suggestions'){
       const decisions = {}; f.querySelectorAll('input[type=checkbox]').forEach(c => decisions[c.name] = c.checked ? 'approved' : 'rejected');
       act({type:'decide_suggestions', decisions}, 'Aplica las sugerencias marcadas.');
-    } else if(a.type === 'input'){
-      const params = {}; f.querySelectorAll('input').forEach(i => { if(i.value.trim()) params[i.name] = i.type === 'number' ? +i.value : i.value.trim(); });
-      act({type:'input', goal:a.goal, params}, a.label+' con los datos indicados.');
+    } else if(a.type === 'input' || a.type === 'tool_input'){
+      const params = {}; f.querySelectorAll('input, select, textarea').forEach(i => { if(i.value.trim()) params[i.name] = i.type === 'number' ? +i.value : i.value.trim(); });
+      act(a.type === 'input' ? {type:'input', goal:a.goal, preset:a.preset || {}, params} : {type:'tool_input', name:a.name, params}, a.label+' con los datos indicados.');
     } else if(a.type === 'approve'){
       if(!f.querySelector('input[type=checkbox]').checked){ f.querySelector('.suggest').textContent = 'Marca la confirmación de los supuestos para aprobar.'; return; }
       act({type:'approve', artifact:a.artifact, assumptions_confirmed:true}, 'Confirmo los supuestos y apruebo la HU.');
@@ -377,7 +382,10 @@ function bindForms(root){
 function actionForm(a){
   const data = esc(JSON.stringify(a));
   if(a.type === 'decide_suggestions') return '<form class="form" data-form="'+data+'">'+a.suggestions.map(s => '<label class="row"><input type="checkbox" name="'+esc(s.name)+'" checked><span><strong>'+esc(s.name)+'</strong> ('+esc(s.status)+'): '+esc(s.suggestion)+'</span></label>').join('')+'<div><button class="btn" type="submit">'+icon('check-circle')+'Aplicar decisiones</button></div></form>';
-  if(a.type === 'input') return '<form class="form" data-form="'+data+'">'+a.params.map(p => '<label>'+esc(p.question)+'<input name="'+esc(p.name)+'" type="'+(/users|seconds|_ms/.test(p.name)?'number':'text')+'" required></label>').join('')+'<div><button class="btn" type="submit">'+icon('arrow-right')+'Continuar</button></div></form>';
+  if(a.type === 'input' || a.type === 'tool_input') return '<form class="form" data-form="'+data+'">'+a.params.map(p => '<label>'+esc(p.question)+
+    (p.choices?.length ? '<select name="'+esc(p.name)+'">'+p.choices.map(c => '<option>'+esc(c)+'</option>').join('')+'</select>'
+      : p.multiline ? '<textarea name="'+esc(p.name)+'" required></textarea>'
+      : '<input name="'+esc(p.name)+'" type="'+(/users|seconds|_ms/.test(p.name)?'number':'text')+'" required>')+'</label>').join('')+'<div><button class="btn" type="submit">'+icon('arrow-right')+'Continuar</button></div></form>';
   return '<form class="form" data-form="'+data+'"><ul class="rules">'+a.confirm_assumptions.map(x => '<li>'+esc(x)+'</li>').join('')+'</ul><label class="row"><input type="checkbox"><span>Confirmo que los supuestos son correctos.</span></label><div class="suggest"></div><div><button class="btn" type="submit">'+icon('check-circle')+'Aprobar la HU</button> <button class="btn" type="button" onclick="act({type:\'edit_story\', instruction:\'Corrige los supuestos de la historia\'}, \'Corrige los supuestos.\')">Corregir un supuesto</button></div></form>';
 }
 
@@ -393,11 +401,29 @@ function assistantTrace(a){
 }
 
 /* Artefactos del flujo */
+const APPROVABLE = ['story', 'matrix', 'automation', 'pipeline', 'performance_design', 'azure_work_item'];
 function renderArtifact(a, changes){
   const r = { story: storyDoc, invest: renderInvest, matrix: renderMatrix, risk: renderRisk, automation: renderAutomation, pipeline: renderPipeline,
-              performance_design: renderPerformance, azure_work_item: renderWorkItem }[a.kind];
-  return r ? r(a, changes) : '';
+              performance_design: renderPerformance, azure_work_item: renderWorkItem, database_validation: renderDbValidation, execution: renderExecution }[a.kind];
+  if(!r) return '';
+  // Verificación humana (RT-02): cada entregable se aprueba o rechaza sobre la versión mostrada.
+  const review = APPROVABLE.includes(a.kind) && !a.approved ? '<div class="doc-actions" style="border:none;background:none;padding:10px 0 0">'+
+    '<button class="btn" data-review="approve" data-artifact="'+a.kind+'">'+icon('check-circle')+'Verifiqué y apruebo v'+a.version+'</button>'+
+    '<button class="btn" data-review="reject" data-artifact="'+a.kind+'">Rechazar con comentario</button></div>' : '';
+  return r(a, changes) + review;
 }
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-review]'); if(!b || state.busy) return;
+  const artifact = b.dataset.artifact;
+  if(b.dataset.review === 'approve'){
+    const pending = state.flow?.story?.assumptions?.length && artifact === 'story' && !state.flow.story.approved;
+    if(pending){ runSuggested({type:'approve', artifact, confirm_assumptions: state.flow.story.assumptions, label:'Aprobar la HU'}); return; }
+    act({type:'approve', artifact}, 'Verifiqué y apruebo.');
+  } else {
+    const comment = window.prompt('¿Qué hay que corregir?'); if(comment === null) return;
+    act({type:'reject', artifact, comment}, 'Rechazo: '+comment);
+  }
+});
 function head(kind, iconName, chips){ return '<div class="doc"><div class="doc-head">'+icon(iconName)+'<span class="kind">'+kind+'</span><div class="chips">'+chips.join('')+'</div></div>'; }
 function statusChip(a){ return a.approved ? '<span class="chip ok">Aprobado</span>' : '<span class="chip">Borrador</span>'; }
 function storyDoc(a, changes){
@@ -444,13 +470,36 @@ function renderRisk(a){
 }
 function renderAutomation(a){
   const batches = a.data.batches || [];
-  return head('Scripts de automatización', 'flask', ['<span class="chip">'+batches.length+' lote(s)</span>', '<span class="chip ok">Solo PR</span>'])+'<div class="doc-body">'+
-    batches.map((b, i) => '<div class="label">Lote '+(i+1)+' · '+esc(b.framework||'')+' · '+b.case_ids.length+' casos</div>'+Object.keys(b.scripts||{}).map(f => '<div class="mono" style="color:var(--muted-2);line-height:1.8">'+esc(f)+'</div>').join('')).join('<div style="height:10px"></div>')+'</div></div>';
+  const q = batches.map(b => b.quality || {});
+  const ok = q.every(x => x.pr_allowed !== false);
+  let h = head('Scripts de automatización · '+esc(a.data.framework||'')+' ('+esc(a.data.platform||'')+')', 'flask', ['<span class="chip">'+batches.length+' lote(s)</span>', statusChip(a), '<span class="chip '+(ok?'ok':'bad')+'">'+(ok?'Lint y secretos OK':'PR bloqueado')+'</span>']);
+  h += batches.map((b, i) => '<div class="doc-body" style="padding-bottom:6px"><div class="label">Lote '+(i+1)+' · '+b.case_ids.length+' casos · rama '+esc(b.base_branch||'main')+' · '+esc(b.repository||'')+'</div>'+
+    ((b.quality?.findings||[]).length ? '<div class="notice error">'+b.quality.findings.map(esc).join('<br>')+'</div>' : '')+'</div>'+
+    Object.entries(b.scripts||{}).map(([f, code]) => '<details class="file"><summary>'+esc(f)+'</summary><pre class="code">'+esc(code)+'</pre></details>').join('')).join('');
+  return h+'</div>';
 }
-function renderPipeline(a){ return head('Pipeline de Azure DevOps', 'refresh', ['<span class="chip">YAML</span>', '<span class="chip ok">Solo PR</span>'])+'<pre class="code">'+esc(a.data.yaml)+'</pre></div>'; }
+function renderExecution(a){
+  const d = a.data, sm = d.summary || {};
+  return head('Ejecución de scripts · '+esc(d.framework||'')+' ('+esc(d.platform||'')+') · app sintética', 'flask',
+    ['<span class="chip ok">'+sm.passed+' aprobados</span>', '<span class="chip '+(sm.failed?'bad':'ok')+'">'+sm.failed+' fallidos</span>'])+
+    '<div class="tbl-wrap"><table class="grid"><thead><tr><th>Caso</th><th>Petición</th><th>Esperado</th><th>Obtenido</th><th>Resultado</th><th>ms</th></tr></thead><tbody>'+
+    (d.results||[]).map(r => '<tr><td class="mono">'+esc(r.case_id)+'</td><td class="mono">'+esc(r.request||'')+'</td><td>'+esc((r.expected_status||[]).join(' / '))+'</td><td>'+esc(r.status ?? '—')+
+      '</td><td><span class="chip '+((r.result||r.status)==='pass'?'ok':'bad')+'">'+((r.result||r.status)==='pass'?'Aprobado':'Fallido')+'</span></td><td>'+esc(r.duration_ms)+'</td></tr>').join('')+'</tbody></table></div>'+
+    (d.report_id ? '<div class="doc-body"><a class="btn" href="'+API+'/v1/reports/'+encodeURIComponent(d.report_id)+'/download">Descargar evidencia (PDF)</a></div>' : '')+'</div>';
+}
+function renderDbValidation(a){
+  const qs = a.data.queries || [];
+  return head('Validación de datos · base sintética', 'database', ['<span class="chip">'+qs.length+' consulta(s)</span>'])+qs.map(q => '<div class="doc-body" style="border-top:1px solid var(--border-soft)">'+
+    '<div class="label">'+esc(q.purpose||'Consulta')+' <span class="chip '+(q.status==='completed'?'ok':'bad')+'">'+esc(q.status)+'</span></div><div class="mono" style="color:var(--muted-2)">'+esc(q.sql)+'</div>'+
+    (q.findings ? '<div class="suggest">'+q.findings.map(esc).join(', ')+'</div>' : '')+
+    (q.rows?.length ? '<div class="tbl-wrap" style="margin-top:8px"><table class="grid"><thead><tr>'+Object.keys(q.rows[0]).map(c => '<th>'+esc(c)+'</th>').join('')+'</tr></thead><tbody>'+
+      q.rows.map(r => '<tr>'+Object.values(r).map(v => '<td>'+esc(v)+'</td>').join('')+'</tr>').join('')+'</tbody></table></div>' : (q.status==='completed' ? '<div class="suggest">Sin filas: la regla se cumple.</div>' : ''))+
+    (q.report_id ? '<div style="margin-top:8px"><a class="btn" href="'+API+'/v1/reports/'+encodeURIComponent(q.report_id)+'/download">Descargar evidencia</a></div>' : '')+'</div>').join('')+'</div>';
+}
+function renderPipeline(a){ return head('Pipeline de Azure DevOps', 'refresh', ['<span class="chip">YAML</span>', statusChip(a), '<span class="chip ok">Solo PR</span>'])+'<pre class="code">'+esc(a.data.yaml)+'</pre></div>'; }
 function renderPerformance(a){
   const d = a.data;
-  return head('Diseño de prueba de performance', 'bar-chart', ['<span class="chip">'+esc(d.tool)+'</span>', '<span class="chip">No ejecutada</span>'])+'<div class="doc-body"><div class="chips">'+
+  return head('Diseño de prueba de performance', 'bar-chart', ['<span class="chip">'+esc(d.tool)+'</span>', statusChip(a), '<span class="chip">No ejecutada</span>'])+'<div class="doc-body"><div class="chips">'+
     ['Tipo: '+d.scenario_type, d.users+' usuarios', d.duration_seconds+' s', 'SLA p95 '+d.target_sla_ms+' ms', 'Azure Load Testing'].map(x => '<span class="chip">'+esc(x)+'</span>').join('')+'</div></div></div>';
 }
 function renderWorkItem(a){
@@ -460,21 +509,18 @@ function renderWorkItem(a){
 }
 
 /* Herramientas HU-010 / HU-011 */
-async function executeDatabaseDemo(retrying){
-  if(state.busy) return;
-  const script = 'select order_id, status from sales_orders limit 10';
-  if(retrying !== true) addTurn('user', 'Valida la consulta de estados de pedidos en la base sintética.');
-  setBusy(true);
-  const working = addWorking('Ejecutando análisis estático y consulta en PostgreSQL sintético…');
-  try {
-    const d = await api('/v1/database/scripts/execute', {engine:'postgresql', environment:'qa', case_id:'TC-DB-DEMO-001', output_format:'pdf', script});
-    const rows = d.rows || [], cols = rows.length ? Object.keys(rows[0]) : [], ok = d.status === 'completed';
-    working.querySelector('.body').innerHTML = '<p>'+(ok ? 'La consulta pasó el análisis estático como solo lectura y se ejecutó en '+Math.round(d.duration_ms)+' ms sobre el perfil sintético. Devolvió '+rows.length+' registros'+(d.report_generated?' y quedó generado el reporte de evidencia.':'.') : 'La ejecución no se completó ('+esc(d.error||d.status)+').')+'</p>'+
-      '<div class="doc"><div class="doc-head">'+icon('database')+'<span class="kind">Validación de base de datos</span><div class="chips"><span class="chip '+(ok?'ok':'bad')+'">'+(ok?'Completada':'Fallida')+'</span></div></div>'+
-      '<div class="doc-body" style="border-bottom:1px solid var(--border-soft)"><div class="mono" style="color:var(--muted-2)">'+esc(script)+'</div></div>'+
-      (rows.length?'<div class="tbl-wrap"><table class="grid"><thead><tr>'+cols.map(c => '<th>'+esc(c)+'</th>').join('')+'</tr></thead><tbody>'+rows.map(r => '<tr>'+cols.map(c => '<td>'+esc(r[c])+'</td>').join('')+'</tr>').join('')+'</tbody></table></div>':'')+'</div>';
-  } catch(e){ showError(working, e.message, () => executeDatabaseDemo(true)); }
-  finally { setBusy(false); scroll(); }
+/* Herramientas: la lista completa sale del servidor; cada una responde con el contexto de la conversación */
+const FLOW_TOOLS = [
+  {name:'validar_bd', title:'Validación de base de datos', description:'HU-011 · consultas derivadas de la HU, solo lectura, con evidencia'},
+  {name:'exportar_matriz', title:'Exportar casos a Excel', description:'HU-004 · la matriz vigente de la HU'},
+];
+async function loadTools(){
+  const el = document.getElementById('tools');
+  let catalog = [];
+  try { catalog = (await (await fetch(API+'/v1/assistant/capabilities')).json()).catalogo || []; } catch(e){}
+  const tools = [...FLOW_TOOLS, ...catalog.map(t => ({name:t.name, title:t.title, description:t.description}))];
+  el.innerHTML = tools.map((t, i) => '<div class="tool"><div><strong>'+esc(t.title)+'</strong><small>'+esc(t.description)+'</small></div><button class="btn" data-tool="'+i+'">Usar</button></div>').join('');
+  el.querySelectorAll('[data-tool]').forEach(b => b.onclick = () => { const t = tools[+b.dataset.tool]; act({type:'tool', name:t.name}, 'Usa la herramienta: '+t.title+'.'); });
 }
 
 /* Sesión */
@@ -492,7 +538,7 @@ async function checkHealth(){
     if(d.environment) document.getElementById('env-tag').textContent = d.environment.toUpperCase()+(d.mode==='synthetic'?' · Datos sintéticos':'');
   } catch(e){ statusEl.textContent = 'Sin conexión con el servidor'; dotEl.classList.add('off'); }
 }
-renderFlow(); checkHealth(); input.focus();
+renderFlow(); loadTools(); checkHealth(); input.focus();
 </script>
 </body>
 </html>

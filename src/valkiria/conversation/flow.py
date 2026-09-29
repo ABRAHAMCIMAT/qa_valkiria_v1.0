@@ -7,8 +7,10 @@ la acción que lo hace avanzar.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
+from valkiria.memory.text import fold
 from valkiria.workflow.graph import CAPABILITIES
 from valkiria.workflow.planner import (
     INPUT_QUESTIONS,
@@ -27,15 +29,35 @@ STEPS: list[tuple[str, str, str, str | None, tuple[tuple[str, bool], ...]]] = [
     ("approve_matrix", "RT-02", "Aprobación de la matriz", None, (("matrix", False),)),
     ("risk", "HU-005", "Análisis de riesgo", "risk", (("story", True),)),
     ("automation", "HU-009", "Scripts de automatización", "automation", (("matrix", False),)),
+    ("execution", "HU-010", "Ejecución de scripts (sintética)", "execution", (("automation", True),)),
     ("pipeline", "HU-007", "Pipeline de Azure DevOps", "pipeline", ()),
     ("performance_design", "HU-008A", "Diseño de prueba de performance", "performance_design", (("story", False),)),
     ("azure_work_item", "HU-006", "Work Item de Azure DevOps (vista previa)", "azure_work_item", (("story", True),)),
 ]
 LABELS = {key: label for key, _, label, _, _ in STEPS}
-INPUTS = {"automation": ("repository",), "performance_design": ("performance_users", "performance_duration_seconds", "performance_sla_ms"),
+INPUTS = {"automation": ("framework", "repository"), "performance_design": ("performance_users", "performance_duration_seconds", "performance_sla_ms"),
           "azure_work_item": ("azure_project",)}
 RUN_LABELS = {"invest": "Evaluar INVEST", "matrix": "Generar la matriz de pruebas", "risk": "Evaluar el riesgo", "automation": "Generar los scripts",
+              "execution": "Ejecutar los scripts en la app sintética",
               "pipeline": "Generar el pipeline", "performance_design": "Diseñar la prueba de performance", "azure_work_item": "Preparar el Work Item"}
+
+
+_NFR = re.compile(r"\b(tiempo de respuesta|segundos?|milisegundos|ms|concurrent\w*|simultane\w*|miles|masiv\w*|pico|picos|temporada|black friday|"
+                  r"rendimiento|carga|latencia|escal\w*|volumen)\b")
+
+
+def performance_reason(state: WorkflowState | None) -> str | None:
+    """Por qué se sugiere una prueba de performance, o None si no aplica (HU-005 regla 6; HU-008A regla 1)."""
+    if not state:
+        return None
+    risk = state.artifacts.get("risk")
+    if risk and risk.payload.get("level") == "high":
+        return "el riesgo de la HU es alto"
+    story = state.artifacts.get("story")
+    if story and _NFR.search(fold(" ".join([story.payload.get("description", ""), *story.payload.get("business_rules", []),
+                                             *(c.get("text", "") for c in story.payload.get("acceptance_criteria", []))]))):
+        return "la historia tiene requisitos de rendimiento (tiempos, volumen o concurrencia)"
+    return None
 
 
 def _stale(state: WorkflowState, artifact: str) -> bool:
@@ -125,28 +147,53 @@ def next_actions(state: WorkflowState, steps: list[dict[str, Any]]) -> list[dict
     invest = state.artifacts.get("invest")
     if by_key["invest"]["state"] in {"pending", "stale"}:
         add({"type": "run", "goal": "invest", "label": RUN_LABELS["invest"]})
+    story_approved = by_key["approve_story"]["state"] == "done"
+    decide = None
     if by_key["story_revision"]["state"] == "action" and invest:
-        add({"type": "decide_suggestions", "label": "Decidir sugerencias INVEST", "version": invest.version, "content_hash": invest.content_hash,
-             "suggestions": [{"name": c["name"], "status": c["status"], "suggestion": c["suggestion"]} for c in actionable_suggestions(invest.payload.get("criteria", []))]})
+        decide = {"type": "decide_suggestions", "label": "Decidir sugerencias INVEST", "version": invest.version, "content_hash": invest.content_hash,
+                  "suggestions": [{"name": c["name"], "status": c["status"], "suggestion": c["suggestion"]} for c in actionable_suggestions(invest.payload.get("criteria", []))]}
+        if not story_approved:
+            add(decide)  # antes de aprobar, refinar la HU es el paso natural
     if by_key["approve_story"]["state"] == "action":
         step = by_key["approve_story"]
         add({"type": "approve", "artifact": "story", "label": f"Aprobar la HU v{step['version']}", "version": step["version"], "content_hash": step["content_hash"],
              "confirm_assumptions": step["assumptions"]})
-    for key in ("matrix", "risk", "automation", "pipeline", "performance_design", "azure_work_item"):
+    for key in ("matrix", "risk", "automation", "execution", "pipeline", "performance_design", "azure_work_item"):
         step = by_key[key]
         if step["state"] in {"pending", "stale", "failed"} and step["ready"]:
+            if key == "performance_design" and performance_reason(state):
+                # HU-005 regla 6 / HU-008A: sugerida, sin forzar, por riesgo alto o requisitos de rendimiento.
+                add({"type": "input", "goal": key, "label": "Diseñar la prueba de performance (sugerida)", "why": performance_reason(state),
+                     "params": [param_spec(n) for n in step.get("missing_inputs", [])] + [param_spec("performance_type")]})
+                continue
             if step.get("missing_inputs"):
-                add({"type": "input", "goal": key, "label": RUN_LABELS[key], "params": [{"name": n, "question": INPUT_QUESTIONS[n]} for n in step["missing_inputs"]]})
+                add({"type": "input", "goal": key, "label": RUN_LABELS[key], "params": [param_spec(n) for n in step["missing_inputs"]]})
             else:
                 add({"type": "run", "goal": key, "label": ("Regenerar: " if step["state"] == "stale" else "") + RUN_LABELS[key]})
         if key == "matrix" and by_key["approve_matrix"]["state"] == "action" and step["state"] == "done":
             add({"type": "approve", "artifact": "matrix", "label": f"Aprobar la matriz v{by_key['approve_matrix']['version']}",
                  "version": by_key["approve_matrix"]["version"], "content_hash": by_key["approve_matrix"]["content_hash"], "confirm_assumptions": []})
-    work_item = state.artifacts.get("azure_work_item")
-    if work_item and not work_item.approved:
-        add({"type": "approve", "artifact": "azure_work_item", "label": "Aprobar la publicación del Work Item", "version": work_item.version,
-             "content_hash": work_item.content_hash, "confirm_assumptions": []})
-    return actions[:4]
+    if decide and story_approved:
+        # Con la HU ya aprobada, nuevas sugerencias INVEST son opcionales: no frenan el avance del flujo.
+        decide["label"] = "Revisar nuevas sugerencias INVEST (opcional)"
+        add(decide)
+    # Verificación humana (RT-02) de cada entregable generado: scripts antes del PR, pipeline, diseño de performance y Work Item.
+    for key, label in (("automation", "Verificar y aprobar los scripts (PR)"), ("pipeline", "Verificar y aprobar el pipeline (PR)"),
+                       ("performance_design", "Verificar y aprobar el diseño de performance"), ("azure_work_item", "Aprobar la publicación del Work Item")):
+        record = state.artifacts.get(key)
+        if record and not record.approved and not _stale(state, key):
+            add({"type": "approve", "artifact": key, "label": label, "version": record.version, "content_hash": record.content_hash, "confirm_assumptions": []})
+    return actions[:8]
+
+
+CHOICES = {"framework": ["playwright", "selenium", "restassured", "postman-newman"], "platform": ["web", "api"], "performance_type": ["load", "stress", "spike", "soak"]}
+
+
+def param_spec(name: str) -> dict[str, Any]:
+    param: dict[str, Any] = {"name": name, "question": INPUT_QUESTIONS[name]}
+    if name in CHOICES:
+        param["choices"] = CHOICES[name]
+    return param
 
 
 def resume_line(view: dict[str, Any]) -> str | None:

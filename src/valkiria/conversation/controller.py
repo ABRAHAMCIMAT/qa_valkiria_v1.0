@@ -23,8 +23,12 @@ import logging
 import re
 from typing import Any
 
-from valkiria.application.automation_execution import export_test_cases_to_excel
-from valkiria.application.prompts import STORY_EDIT_SYSTEM
+from valkiria.application.automation_execution import (
+    export_test_cases_to_excel,
+    static_analyse_database_script,
+)
+from valkiria.application.prompts import SQL_VALIDATION_SYSTEM, STORY_EDIT_SYSTEM
+from valkiria.application.script_generation import FRAMEWORKS as FRAMEWORK_NAMES
 from valkiria.application.use_cases import (
     ValkiriaService,
     _normalize_story,
@@ -33,7 +37,14 @@ from valkiria.application.use_cases import (
 from valkiria.assistant.capabilities import policy_block
 from valkiria.assistant.routing import is_conversational, is_question, route_message
 from valkiria.assistant.tools import ToolContext
-from valkiria.conversation.flow import LABELS, RUN_LABELS, flow_view, resume_line
+from valkiria.conversation.flow import (
+    LABELS,
+    RUN_LABELS,
+    flow_view,
+    param_spec,
+    performance_reason,
+    resume_line,
+)
 from valkiria.domain.models import UserStory
 from valkiria.infrastructure.logging import event, get_logger
 from valkiria.memory.service import MemoryService, describe, recall_prompt
@@ -77,6 +88,16 @@ def extract_params(message: str) -> dict[str, Any]:
     sla = re.search(r"(sla|p95)[^\d]{0,15}(\d+)\s*ms|(\d+)\s*ms", text)
     if sla:
         params["performance_sla_ms"] = int(sla.group(2) or sla.group(3))
+    framework = re.search(r"\b(playwright|selenium|rest ?assured|postman|newman)\b", text)
+    if framework:
+        params["framework"] = {"rest assured": "restassured", "restassured": "restassured", "postman": "postman-newman", "newman": "postman-newman"}.get(framework.group(1), framework.group(1))
+    if re.search(r"\b(api|rest|endpoints?|servicios? web)\b", text):
+        params["platform"] = "api"
+    elif re.search(r"\b(web|navegador|interfaz|ui|pantalla)\b", text):
+        params["platform"] = "web"
+    kind = re.search(r"\b(estres|picos?|spike|resistencia|soak|carga)\b", text)
+    if kind:
+        params["performance_type"] = {"estres": "stress", "pico": "spike", "picos": "spike", "spike": "spike", "resistencia": "soak", "soak": "soak"}.get(kind.group(1), "load")
     project = re.search(r"proyecto\s+([\w.-]+)", message, re.IGNORECASE)
     if project:
         params["azure_project"] = project.group(1)
@@ -84,11 +105,13 @@ def extract_params(message: str) -> dict[str, Any]:
 
 
 class ConversationController:
-    def __init__(self, *, service: ValkiriaService, workflows: WorkflowEngine, assistant, memory: MemoryService):
+    def __init__(self, *, service: ValkiriaService, workflows: WorkflowEngine, assistant, memory: MemoryService, database_executor=None, reports=None):
         self.service = service
         self.workflows = workflows
         self.assistant = assistant
         self.memory = memory
+        self.database_executor = database_executor
+        self.reports = reports
         self.logger = get_logger("valkiria.conversation")
 
     # --- Estado de la sesión ------------------------------------------------------------------------------
@@ -116,6 +139,8 @@ class ConversationController:
         else:
             result = await ctx.understand(message or "")
         view = flow_view(ctx.state)
+        if result.get("reply_suffix"):
+            result["reply"] += result.pop("reply_suffix")
         result.setdefault("actions", view["next"] if ctx.state else [])
         if result.pop("with_resume", False):
             result["resume"] = resume_line(view)
@@ -123,7 +148,8 @@ class ConversationController:
         return result | {"flow": view, "session_id": session_id, "trace_id": trace_id}
 
     async def _remember(self, session_id: str, said: str, result: dict[str, Any], ctx: _Turn) -> None:
-        facts = {"workflow_id": ctx.state.id if ctx.state else None, "pending": ctx.facts.get("pending"), "split": ctx.facts.get("split")}
+        facts = {"workflow_id": ctx.state.id if ctx.state else None, "pending": ctx.facts.get("pending"), "split": ctx.facts.get("split"),
+                 "last_sql": ctx.facts.get("last_sql")}
         try:
             await self.memory.add_turn(session_id, "user", said)
             await self.memory.add_turn(session_id, "assistant", result.get("reply", ""), facts=facts, intent=result.get("intent"))
@@ -199,7 +225,9 @@ class _Turn:
         if story and _EDIT.search(text) and not wants_step:
             return await self.edit_story(message)
         if wants_step:
-            return await self.run(goals[0], extract_params(message))
+            # "Ejecuta los scripts" menciona dos pasos (scripts y ejecución): lo que se pide es ejecutar.
+            goal = "execution" if "execution" in goals and re.search(r"\b(ejecut\w*|corre|correr|run)\b", text) else goals[0]
+            return await self.run(goal, extract_params(message))
         params = extract_params(message)
         waiting = self._waiting_inputs()
         if params and waiting and set(params) & set(waiting[1]):
@@ -223,7 +251,7 @@ class _Turn:
         if kind == "run":
             return await self.run(str(action.get("goal")), dict(action.get("params") or {}))
         if kind == "input":
-            return await self.run(str(action.get("goal")), dict(action.get("params") or {}))
+            return await self.run(str(action.get("goal")), dict(action.get("preset") or {}) | dict(action.get("params") or {}))
         if kind == "approve":
             return await self.approve(str(action.get("artifact", "story")), assumptions_confirmed=bool(action.get("assumptions_confirmed")))
         if kind == "reject":
@@ -244,6 +272,8 @@ class _Turn:
             return await self.create_story(f"Redacta la historia: {chosen['title']}. {chosen.get('description', '')}".strip(), fresh=True)
         if kind == "export_matrix":
             return self.export_matrix()
+        if kind in {"tool", "tool_input"}:
+            return await self.tool(str(action.get("name")), dict(action.get("args") or action.get("params") or {}))
         if kind == "resume":
             return self.resume()
         return {"intent": "aclarar", "reply": "No reconocí esa acción. ¿Me dices qué quieres hacer?"}
@@ -323,14 +353,35 @@ class _Turn:
         step = next((s for s in plan.steps if s.capability == goal), None)
         produced = [k for k, r in self.state.artifacts.items() if before.get(k) != r.version and k != "story"]
         if goal in self.state.failures:
-            return {"intent": "error", "retryable": True, "reply": f"No pude completar {LABELS.get(goal, goal).lower()}: {self.state.failures[goal].message} ¿Lo intentamos de nuevo?",
+            failure = self.state.failures[goal]
+            if failure.error_code == "matrix_requires_split":
+                # HU-004 regla 2: con más de 10 criterios se sugiere dividir la HU; se ofrece hacerlo sin salir del flujo.
+                return {"intent": "aclarar", "reply": f"{failure.message} Te propongo reducir la HU a su flujo principal (máximo 6 criterios) como una nueva versión; "
+                                                      "lo demás puede ir en otras historias.",
+                        "actions": [{"type": "edit_story", "label": "Reducir la HU a su flujo principal",
+                                     "instruction": "Reduce la historia a su flujo principal con máximo 6 criterios de aceptación; conserva lo esencial."},
+                                    {"type": "new_story", "label": "Empezar otra HU con el resto"}]}
+            if failure.error_code == "web_execution_unavailable":
+                return {"intent": "aclarar", "reply": failure.message,
+                        "actions": [{"type": "input", "goal": "automation", "label": "Regenerar los scripts con un stack de API", "preset": {"platform": "api"},
+                                     "params": [param_spec("framework")]}]}
+            return {"intent": "error", "retryable": True, "reply": f"No pude completar {LABELS.get(goal, goal).lower()}: {failure.message} ¿Lo intentamos de nuevo?",
                     "actions": [{"type": "run", "goal": goal, "label": "Reintentar"}]}
         if goal in produced or (step and step.action == "reuse" and goal in self.state.artifacts):
-            return {"intent": "paso", "reply": self._describe(goal, fresh=goal in produced) + self._also(produced, goal), "artifact": self._artifact(goal)}
+            result = {"intent": "paso", "reply": self._describe(goal, fresh=goal in produced) + self._also(produced, goal), "artifact": self._artifact(goal)}
+            if goal == "execution" and self.c.reports is not None:
+                # Evidencia descargable de la ejecución (HU-010).
+                report = self.state.artifacts["execution"].payload.get("report")
+                if report:
+                    await self.c.reports.save(report)
+                    result["artifact"] = {**result["artifact"], "data": {k: v for k, v in result["artifact"]["data"].items() if k != "report"} | {"report_id": report["id"]}}
+            if goal == "risk":
+                result |= self._suggest_performance()
+            return result
         if step and step.missing_inputs:
             questions = " ".join(q for q in (_question(n) for n in step.missing_inputs))
             return {"intent": "aclarar", "reply": f"Con gusto preparo {LABELS.get(goal, goal).lower()}. {questions}",
-                    "actions": [{"type": "input", "goal": goal, "label": RUN_LABELS.get(goal, goal), "params": [{"name": n, "question": _question(n)} for n in step.missing_inputs]}]}
+                    "actions": [{"type": "input", "goal": goal, "label": RUN_LABELS.get(goal, goal), "params": [param_spec(n) for n in step.missing_inputs]}]}
         if step and step.action == "blocked":
             if any(b.startswith("approval:story") for b in step.blocked_by):
                 story = self.state.artifacts["story"]
@@ -406,6 +457,103 @@ class _Turn:
         if first["type"] == "input":
             return {"intent": "aclarar", "reply": " ".join(p["question"] for p in first["params"]), "actions": [first]}
         return self.resume()
+
+    def _suggest_performance(self) -> dict[str, Any]:
+        """HU-005 regla 6 y HU-008A: con riesgo alto (o requisitos de rendimiento en la HU) se sugiere, sin forzar, una prueba de performance."""
+        reason = performance_reason(self.state)
+        if not reason or "performance_design" in self.state.artifacts:
+            return {}
+        options = [("load", "Prueba de carga"), ("stress", "Prueba de estrés"), ("spike", "Prueba de picos")]
+        return {"reply_suffix": f" Te sugiero (sin ser obligatorio) diseñar una prueba de performance: {reason}. ¿De qué tipo la preparo?",
+                "actions": [{"type": "input", "goal": "performance_design", "label": label, "preset": {"performance_type": kind},
+                             "params": [param_spec(n) for n in ("performance_users", "performance_duration_seconds", "performance_sla_ms") if n not in self.state.params]}
+                            for kind, label in options] + flow_view(self.state)["next"][:2]}
+
+    # --- Herramientas del panel: responden según la conversación y la HU en curso -------------------------
+
+    async def tool(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
+        story = self.state.artifacts.get("story") if self.state else None
+        title = story.payload.get("title") if story else None
+        if name == "exportar_matriz":
+            return self.export_matrix()
+        if name == "validar_bd":
+            return await self.validate_database()
+        if name in {"generar_pipeline_azure", "disenar_prueba_performance"}:
+            goal = "pipeline" if name == "generar_pipeline_azure" else "performance_design"
+            if self.state:
+                return await self.run(goal, args)
+            return await self.ask({"generar_pipeline_azure": "Genera el pipeline de Azure DevOps", "disenar_prueba_performance": "Diseña una prueba de performance"}[name])
+        if name in {"redactar_historia", "iniciar_flujo_historia"}:
+            if story:
+                return {"intent": "aclarar", "reply": f"Ya estamos trabajando en la HU «{title}» v{story.version}. ¿Quieres empezar una historia nueva?",
+                        "actions": [{"type": "new_story", "label": "Sí, empezar una HU nueva"}, {"type": "resume", "label": "No, sigamos con la actual"}]}
+            return {"intent": "conversar", "reply": "Cuéntame el requerimiento: quién lo usa, qué necesita hacer y qué resultado espera. Lo convierto en una historia de usuario."}
+        tool = self.c.assistant.toolbox.get(name)
+        if not tool:
+            return {"intent": "aclarar", "reply": "No encontré esa herramienta. Pregúntame qué puedo hacer y te muestro la lista completa."}
+        args = self._contextual_args(name, args, title)
+        missing = [p for p in tool.params if p.required and p.name not in args]
+        if missing:
+            return {"intent": "aclarar", "reply": f"Para usar «{tool.title}» necesito un dato.",
+                    "actions": [{"type": "tool_input", "name": name, "label": tool.title,
+                                 "params": [{"name": p.name, "question": p.ask or p.description, "choices": list(p.choices), "multiline": p.name == "script"} for p in missing]}]}
+        ctx = ToolContext(actor=self.actor, namespace=self.namespace, session_id=self.session_id, trace_id=self.trace_id, workflow_id=self.state.id if self.state else None)
+        try:
+            result = await tool.handler(tool.validate(args), ctx)
+        except Exception as exc:  # noqa: BLE001 - una herramienta que falla no rompe la conversación
+            event(self.c.logger, logging.WARNING, "herramienta_panel_fallo", trace_id=self.trace_id, tool=name, error_type=type(exc).__name__)
+            return {"intent": "error", "retryable": True, "reply": f"No pude usar «{tool.title}» en este momento. ¿Lo intentamos de nuevo?"}
+        summary = tool.summarize(result).text if tool.summarize else str(result)
+        context = f" (en contexto de la HU «{title}»)" if title and name in {"herramienta_bd", "herramienta_automatizacion", "buscar_memoria"} else ""
+        return {"intent": "responder", "reply": summary + context, "with_resume": bool(self.state), "assistant": {"status": "answered", "tools_used": [name], "mode": "tool", "steps": []}}
+
+    def _contextual_args(self, name: str, args: dict[str, Any], title: str | None) -> dict[str, Any]:
+        """Completa los argumentos con lo que ya se sabe de la conversación y del flujo (memoria corta)."""
+        params = self.state.params if self.state else {}
+        framework = params.get("framework")
+        if name == "herramienta_bd":
+            language = {"restassured": "java", "playwright": "node", "postman-newman": "node", "selenium": "python"}.get(framework, "python")
+            return {"motor": "postgresql", "lenguaje": language} | args
+        if name == "herramienta_automatizacion" and (params.get("platform") or framework):
+            platform = params.get("platform") or ("api" if framework in {"restassured", "postman-newman"} else "web")
+            return {"plataforma": platform} | ({"herramienta": framework} if framework else {}) | args
+        if name == "buscar_memoria" and title:
+            return {"consulta": title} | args
+        if name == "analizar_script_sql" and self.facts.get("last_sql"):
+            return {"script": self.facts["last_sql"], "motor": "postgresql"} | args
+        return args
+
+    async def validate_database(self) -> dict[str, Any]:
+        """HU-011: consultas de validación de datos derivadas de la HU en curso, analizadas y ejecutadas en la base sintética."""
+
+        story = self.state.artifacts.get("story") if self.state else None
+        if not story:
+            return {"intent": "aclarar", "reply": "Para validar datos necesito saber qué reglas revisar. Cuéntame el requerimiento o pega la consulta SQL y la analizo.",
+                    "actions": [{"type": "tool_input", "name": "analizar_script_sql", "label": "Análisis estático de SQL",
+                                 "params": [{"name": "script", "question": "Pega la consulta SQL", "choices": [], "multiline": True}]}]}
+        if not self.c.database_executor:
+            return {"intent": "no_puedo", "reply": "La base sintética no está configurada en este entorno, así que no puedo ejecutar la validación."}
+        body = UserStory.model_validate(story.payload).model_dump_json(include={"title", "description", "business_rules", "acceptance_criteria"})
+        data = await self.c.service.llm.generate_json(system=SQL_VALIDATION_SYSTEM, user=f"Historia:\n{body}", schema={"type": "object"})
+        results = []
+        for n, query in enumerate(q for q in (data.get("queries") or [])[:3] if isinstance(q, dict)):
+            sql = str(query.get("sql") or "").strip().rstrip(";")
+            analysis = static_analyse_database_script(sql, "postgresql") if sql else {"passed": False, "statement_type": "empty", "findings": ["vacía"]}
+            if not sql.lower().startswith("select") or analysis["statement_type"] != "read_only" or not analysis["passed"]:
+                results.append({"purpose": query.get("purpose"), "sql": sql, "status": "bloqueada", "findings": analysis.get("findings") or ["no es de solo lectura"]})
+                continue
+            outcome, report = self.c.database_executor.execute(script=sql, case_id=f"HU-011-{story.version}-{n + 1}", trace_id=self.trace_id or "", output_format="pdf")
+            if report and self.c.reports is not None:
+                await self.c.reports.save(report)
+            results.append({"purpose": query.get("purpose"), "sql": sql, "status": outcome.get("status"), "rows": (outcome.get("rows") or [])[:10],
+                            "row_count": len(outcome.get("rows") or []), "report_id": (report or {}).get("id")})
+            self.facts["last_sql"] = sql
+        if not results:
+            return {"intent": "error", "retryable": True, "reply": "No logré derivar consultas de validación de la historia. ¿Lo intentamos de nuevo?"}
+        executed = [r for r in results if r["status"] == "completed"]
+        reply = (f"Derivé {len(results)} consulta(s) de validación de la HU «{story.payload.get('title')}» v{story.version} y ejecuté {len(executed)} en la base sintética "
+                 "(solo lectura, con evidencia descargable).")
+        return {"intent": "paso", "reply": reply, "with_resume": True, "artifact": {"kind": "database_validation", "data": {"queries": results}}}
 
     def resume(self) -> dict[str, Any]:
         return {"intent": "conversar", "reply": resume_line(flow_view(self.state)) or "¿En qué te ayudo?"}
@@ -494,7 +642,17 @@ class _Turn:
             return f"{prefix}: el riesgo de la HU es {level}{score}. {p.get('mitigation', '')}".strip()
         if goal == "automation":
             total = sum(len(b["case_ids"]) for b in p["batches"])
-            return f"{prefix}: generé {total} scripts en {len(p['batches'])} lote(s); se entregan solo por pull request, sin commit directo."
+            files = sum(len(b.get("scripts", {})) for b in p["batches"])
+            quality = all(b.get("quality", {}).get("pr_allowed", True) for b in p["batches"])
+            stack = f"{FRAMEWORK_NAMES.get(p.get('framework'), p.get('framework'))} ({p.get('platform')})"
+            return (f"{prefix}: generé el código de {total} casos en {stack}: {files} archivos con Page Object, datos externalizados y un script por caso "
+                    f"con su id. Lint y detección de secretos: {'sin hallazgos' if quality else 'con hallazgos, el PR queda bloqueado'}. "
+                    "Revísalos y apruébalos para abrir el pull request (sin commit directo).")
+        if goal == "execution":
+            summary = p["summary"]
+            outcome = "todos aprobados" if summary["failed"] == 0 else f"{summary['failed']} fallido(s): revisa la evidencia"
+            return (f"{prefix}: ejecuté los {summary['total']} casos de {FRAMEWORK_NAMES.get(p.get('framework'), p.get('framework'))} contra la app sintética de Nissan "
+                    f"({summary['passed']} aprobados, {outcome}). La evidencia en PDF queda descargable.")
         if goal == "pipeline":
             return f"{prefix}: el YAML del pipeline referencia {len(p.get('scripts') or [])} script(s). Se entrega por pull request para revisión de DevOps."
         if goal == "performance_design":
@@ -506,7 +664,8 @@ class _Turn:
 
 
 def _the(artifact: str) -> str:
-    return {"story": "la historia de usuario", "matrix": "la matriz de pruebas", "azure_work_item": "el Work Item de Azure DevOps", "invest": "la evaluación INVEST"}.get(
+    return {"story": "la historia de usuario", "matrix": "la matriz de pruebas", "azure_work_item": "el Work Item de Azure DevOps", "invest": "la evaluación INVEST",
+            "automation": "los scripts de automatización", "execution": "la ejecución de los scripts", "pipeline": "el pipeline de Azure DevOps", "performance_design": "el diseño de la prueba de performance"}.get(
         artifact, LABELS.get(artifact, artifact).lower())
 
 

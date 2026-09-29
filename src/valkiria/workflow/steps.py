@@ -7,27 +7,31 @@ determinista y declararlo como advertencia. Nunca se presenta como generado por 
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass, field
 from typing import Any
 
 from pydantic import ValidationError
 
-from valkiria.application.automation_execution import create_automation_batch
-from valkiria.application.prompts import INVEST_SYSTEM, MATRIX_SYSTEM, REVISION_SYSTEM
+from valkiria.application.automation_execution import (
+    build_evidence_report,
+    create_automation_batch,
+)
+from valkiria.application.automation_runner import execute_api_cases
+from valkiria.application.prompts import INVEST_SYSTEM, REVISION_SYSTEM
 from valkiria.application.qa_artifacts import (
     MAX_AUTOMATION_BATCH,
     PolicyViolation,
     generate_pipeline_yaml,
     performance_plan,
 )
+from valkiria.application.script_generation import FRAMEWORKS as FRAMEWORK_NAMES
 from valkiria.application.use_cases import (
     ValkiriaService,
     _normalize_invest,
-    _normalize_matrix,
     _normalize_story,
     _story_changes,
-    matrix_user_prompt,
 )
 from valkiria.domain.models import InvestEvaluation, TestMatrix, UserStory
 from valkiria.memory.service import with_memory
@@ -37,7 +41,6 @@ from valkiria.workflow.validators import (
     MAX_CRITERIA_PER_MATRIX,
     missing_case_slots,
     validate_invest,
-    validate_matrix,
 )
 
 PERFORMANCE_TOOLS = {"jmeter", "locust"}  # Soportadas por Azure Load Testing (HU-008A/B).
@@ -148,21 +151,18 @@ async def run_matrix(state: WorkflowState, service: ValkiriaService, memory: str
     matrix = await service.generate_matrix(story, state.actor, memory=memory)
     cases = [c.model_dump(mode="json") for c in matrix.cases]
     warnings: list[str] = []
-    findings = validate_matrix(cases, ids)
-    if findings:
-        repair = "Corrige la matriz. Problemas detectados:\n- " + "\n- ".join(findings[:15]) + "\n\nHistoria:\n" + matrix_user_prompt(story)
-        repaired = _normalize_matrix(await _generate(service, MATRIX_SYSTEM, repair, TestMatrix.model_json_schema()))["cases"]
-        if len(validate_matrix(repaired, ids)) < len(findings):
-            cases = repaired
-        warnings.append("La matriz se corrigió una vez para cumplir HU-004.")
+    by_id = {c.id: c for c in story.acceptance_criteria}
+    missing = sorted({criterion_id for criterion_id, _ in missing_case_slots(cases, ids)})
+    if missing:
+        # Solo se regeneran los criterios incompletos (formato compacto, en paralelo).
+        cases = [c for c in cases if c.get("criterion_id") not in missing]
+        for group in await asyncio.gather(*(service.matrix_cases(story, by_id[cid], memory=memory) for cid in missing)):
+            cases += group
+        warnings.append(f"Se regeneraron {len(missing)} criterio(s) incompletos para cumplir HU-004.")
     cases = _fit_matrix([c for c in cases if c.get("criterion_id") in ids], ids)
-    slots = missing_case_slots(cases, ids)
-    if slots:
-        by_id = {c["id"]: c for c in criteria}
-        for n, (criterion_id, case_type) in enumerate(slots, start=1):
-            cases.append(_template_case(f"TC-AUTO-{n:02d}", by_id[criterion_id], case_type))
-        cases = _fit_matrix(cases, ids)
-        warnings.append(f"Se completaron {len(slots)} caso(s) con plantilla determinista para cumplir el mínimo positivo/negativo/borde por criterio; revísalos.")
+    templated = sorted({c["criterion_id"] for c in cases if c.get("template")})
+    if templated:
+        warnings.append(f"Casos completados con plantilla determinista para {', '.join(templated)} porque el modelo no respondió; revísalos.")
     TestMatrix.model_validate({"story_id": str(story.id), "cases": cases})
     if not state.artifacts["story"].approved:
         warnings.append("Matriz generada desde una HU en borrador (HU-004, regla 4).")
@@ -179,15 +179,22 @@ async def run_risk(state: WorkflowState, service: ValkiriaService, memory: str =
     return StepOutput(payload, _versions(state, "story"), warnings, f"Riesgo {assessment.level.value}.")
 
 
+API_ONLY = {"restassured", "postman-newman"}
+
+
 async def run_automation(state: WorkflowState, service: ValkiriaService, memory: str = "") -> StepOutput:
     matrix = state.artifacts["matrix"]
     cases = matrix.payload["cases"]
     params = state.params
+    framework = str(params.get("framework", "playwright")).lower().replace(" ", "")
+    framework = {"postman": "postman-newman", "newman": "postman-newman", "rest-assured": "restassured"}.get(framework, framework)
+    platform = str(params.get("platform") or ("api" if framework in API_ONLY else "web")).lower()
+    feature = str(state.artifacts["story"].payload.get("title", "Aplicacion"))
     batches = []
     for start in range(0, len(cases), MAX_AUTOMATION_BATCH):
         try:
-            batches.append(create_automation_batch(cases=cases[start:start + MAX_AUTOMATION_BATCH], framework=str(params.get("framework", "playwright")), platform=str(params.get("platform", "web")),
-                                                   repository=str(params["repository"]), base_branch=str(params.get("base_branch", "main")), matrix_status="approved" if matrix.approved else "draft"))
+            batches.append(create_automation_batch(cases=cases[start:start + MAX_AUTOMATION_BATCH], framework=framework, platform=platform, repository=str(params["repository"]),
+                                                   base_branch=str(params.get("base_branch", "main")), matrix_status="approved" if matrix.approved else "draft", feature=feature))
         except PolicyViolation as exc:
             raise StepError("automation_policy_violation", str(exc), retryable=False) from exc
     warnings = []
@@ -195,19 +202,59 @@ async def run_automation(state: WorkflowState, service: ValkiriaService, memory:
         warnings.append(f"{len(cases)} casos divididos en {len(batches)} lotes de máximo {MAX_AUTOMATION_BATCH} (HU-009, regla 1).")
     if not matrix.approved:
         warnings.append("Scripts generados desde una matriz en borrador; se marcarán como desactualizados si la matriz cambia.")
-    return StepOutput({"batches": batches}, _versions(state, "matrix"), warnings, f"{sum(len(b['case_ids']) for b in batches)} scripts en {len(batches)} lote(s), entrega solo por pull request.")
+    findings = [f for b in batches for f in b.get("quality", {}).get("findings", [])]
+    if findings:
+        warnings.append("El pull request no se abre hasta resolver: " + "; ".join(findings[:5]) + " (HU-009, regla 6).")
+    total = sum(len(b["case_ids"]) for b in batches)
+    return StepOutput({"batches": batches, "framework": framework, "platform": platform}, _versions(state, "matrix"), warnings,
+                      f"{total} scripts {FRAMEWORK_NAMES.get(framework, framework)} ({platform}) en {len(batches)} lote(s), entrega solo por pull request.")
+
+
+async def run_execution(state: WorkflowState, service: ValkiriaService, memory: str = "") -> StepOutput:
+    """HU-010: ejecución controlada de los scripts aprobados contra la app sintética, con evidencia por caso."""
+    automation = state.artifacts["automation"]
+    platform, framework = automation.payload.get("platform", "web"), automation.payload.get("framework", "playwright")
+    cases = [case for batch in automation.payload["batches"] for case in batch.get("cases", [])]
+    if platform == "api":
+        results = await execute_api_cases(cases, base_url=service.synthetic_app_base_url, transport=service.synthetic_transport)
+    elif service.web_runner is not None:
+        results = await service.web_runner.run(base_url=service.synthetic_app_base_url, cases=cases)
+    else:
+        raise StepError("web_execution_unavailable", "La app sintética de Nissan es una API sin interfaz web, así que los scripts web no tienen contra qué ejecutarse en "
+                        "este entorno. Regenera los scripts con un stack de API (Playwright, RestAssured o Postman-Newman) para ejecutarlos aquí, o ejecuta los "
+                        "scripts web en tu pipeline contra la interfaz real.", retryable=False)
+    passed = sum(r.get("result", r.get("status")) == "pass" for r in results)
+    execution_id = f"HU-010-{automation.version}-{state.id[:8]}"
+    report = build_evidence_report(execution_id=execution_id, title="Valkiria · Evidencia de ejecución de scripts (HU-010)", output_format="pdf",
+                                   fields={"historia": state.artifacts["story"].payload.get("title"), "stack": f"{framework} ({platform})",
+                                           "casos": len(results), "aprobados": passed, "fallidos": len(results) - passed, "trace_id": state.trace_id},
+                                   logs=[f"{r['case_id']} {r.get('request', '')} -> {r.get('status')} esperado {r.get('expected_status', '')} ({r.get('result', '')})" for r in results])
+    warnings = ["Ejecución en el entorno sintético, nunca en producción."]
+    if passed < len(results):
+        warnings.append(f"{len(results) - passed} caso(s) fallidos: revisa la evidencia antes de integrar el pull request.")
+    return StepOutput({"platform": platform, "framework": framework, "results": results, "summary": {"total": len(results), "passed": passed, "failed": len(results) - passed},
+                       "report": report}, _versions(state, "automation"), warnings, f"{passed} de {len(results)} casos aprobados en la ejecución sintética.")
+
+
+RUN_COMMANDS = {"playwright": "npx playwright test", "selenium": "pytest tests", "restassured": "mvn -B test",
+                "postman-newman": "npx newman run {file} --env-var baseUrl=$(BASE_URL) --reporters cli,junit"}
 
 
 async def run_pipeline(state: WorkflowState, service: ValkiriaService, memory: str = "") -> StepOutput:
     scripts: list[str] = []
     automation = state.artifacts.get("automation")
     if automation:
+        framework = automation.payload.get("framework", "playwright")
         for batch in automation.payload["batches"]:
-            for filename in batch.get("scripts", {}):
-                scripts.append(f"npx playwright test tests/automation/{filename}" if filename.endswith(".spec.ts") else f"echo 'Ejecutar tests/automation/{filename}'")
+            collections = [name for name in batch.get("scripts", {}) if name.endswith(".postman_collection.json")]
+            command = RUN_COMMANDS.get(framework, "echo 'Ejecutar los scripts del lote'")
+            for item in (collections or [None]):
+                line = command.format(file=item) if item else command
+                if line not in scripts:
+                    scripts.append(line)
     text = generate_pipeline_yaml(scripts=scripts or None)
     warnings = [] if scripts else ["Sin scripts todavía: la etapa de test queda con advertencia y no reporta pruebas aprobadas (HU-007)."]
-    return StepOutput({"yaml": text, "scripts": scripts, "delivery": "pull_request_only"}, _versions(state, "automation"), warnings, f"Pipeline YAML con {len(scripts)} script(s).")
+    return StepOutput({"yaml": text, "scripts": scripts, "delivery": "pull_request_only"}, _versions(state, "automation"), warnings, f"Pipeline YAML con {len(scripts)} comando(s) de prueba.")
 
 
 async def run_performance_design(state: WorkflowState, service: ValkiriaService, memory: str = "") -> StepOutput:
@@ -242,6 +289,7 @@ EXECUTORS = {
     "matrix": run_matrix,
     "risk": run_risk,
     "automation": run_automation,
+    "execution": run_execution,
     "pipeline": run_pipeline,
     "performance_design": run_performance_design,
     "azure_work_item": run_azure_work_item,

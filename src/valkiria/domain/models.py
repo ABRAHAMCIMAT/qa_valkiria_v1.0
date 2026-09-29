@@ -87,6 +87,8 @@ class TestCase(BaseModel):
     expected_result: str
     priority: str = "medium"
     type: CaseType
+    # Caso completado con plantilla porque el modelo no respondió: se declara para que el QA lo revise.
+    template: bool = False
 
 
 class TestMatrix(BaseModel):

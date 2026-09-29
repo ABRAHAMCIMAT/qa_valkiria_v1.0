@@ -21,7 +21,11 @@ def test_hu010_generates_traceable_scripts_for_max_15_cases():
     result = create_automation_batch(cases=cases, framework="playwright", platform="web", repository="org/repo", base_branch="main", matrix_status="draft")
     assert result["traceability"] is True
     assert result["pr_required"] is True
-    assert set(result["scripts"]) == {"TC-001.spec.ts", "TC-002.spec.ts"}
+    specs = {name: code for name, code in result["scripts"].items() if name.startswith("tests/specs/")}
+    assert set(specs) == {"tests/specs/tc_001.spec.ts", "tests/specs/tc_002.spec.ts"}  # un script por caso (HU-009, regla 3)
+    assert all(cid in specs[f"tests/specs/{cid.lower().replace('-', '_')}.spec.ts"] for cid in ("TC-001", "TC-002"))
+    assert "tests/pages/AplicacionPage.ts" in result["scripts"] and "tests/data/aplicacion.json" in result["scripts"]  # POM y datos externos (regla 4)
+    assert result["quality"]["pr_allowed"] is True  # lint y detección de secretos (regla 6)
     assert result["language"] == "typescript"
     assert result["execution_tool"] == "playwright"
     assert all("assert True" not in script for script in result["scripts"].values())

@@ -189,7 +189,7 @@ async def test_each_task_has_an_output_token_budget(monkeypatch):
     llm = OpenAICompatibleLLM("http://ollama.test/v1", "m", token_budget=prompts.token_budget)
     await llm.generate_json(system=prompts.ASSISTANT_SYSTEM.format(max_steps=4, catalog=""), user="u", schema={})
     assert '"max_tokens":500' in sent["body"]
-    assert prompts.token_budget(prompts.MATRIX_SYSTEM) == 1200  # por criterio: 3 casos caben holgados
+    assert prompts.token_budget(prompts.MATRIX_SYSTEM) == 700  # formato compacto por criterio
 
 
 async def test_empty_model_split_still_triggers_the_focused_split():

@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     llm_auth_header: Literal["authorization", "api-key"] = "authorization"
     # RT-04: tiempo máximo de respuesta del modelo.
     llm_timeout_seconds: float = Field(default=60, gt=0, le=600)
+    # Llamadas simultáneas al modelo (Ollama con OLLAMA_NUM_PARALLEL); acelera la matriz por criterio.
+    llm_max_parallel: int = Field(default=4, ge=1, le=16)
     allowed_origins: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["http://localhost:3000"])
     mode: str = "synthetic"
     environment: str = "qa"

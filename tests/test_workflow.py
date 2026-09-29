@@ -148,14 +148,17 @@ async def test_failed_step_is_isolated_and_can_be_resumed(llm):
 
 
 async def test_incomplete_llm_matrix_is_repaired_or_completed_deterministically(llm):
-    llm.matrix = {"cases": [{"id": "TC-1", "criterion_id": "AC-01", "scenario": "ok", "expected_result": "ok", "type": "positive"}]}
+    # El modelo entrega los 3 casos de AC-01 pero nada útil para AC-02: se reintenta ese criterio y, si sigue igual, se completa con plantilla declarada.
+    llm.matrix = {"cases": [{"id": f"TC-{t}", "criterion_id": "AC-01", "scenario": "ok", "expected_result": "ok", "type": t} for t in ("positive", "negative", "edge")]}
     engine = engine_for(llm)
     state, _ = await engine.start(request=None, goals=["matrix"], params={"requirement": "Consultar vehículos"}, actor="qa")
     cases = state.artifacts["matrix"].payload["cases"]
     coverage = {(c["criterion_id"], c["type"]) for c in cases}
     assert coverage == {(c, t) for c in ("AC-01", "AC-02") for t in ("positive", "negative", "edge")}
-    assert llm.calls.count("matrix") == 3  # una llamada por criterio (2) y una corrección
-    assert any("plantilla determinista" in w for w in state.artifacts["matrix"].warnings)
+    assert [c["id"] for c in cases if c["criterion_id"] == "AC-01"] == ["TC-AC-01-P", "TC-AC-01-N", "TC-AC-01-E"]
+    assert all(c["preconditions"] == ["stock"] for c in cases if c["criterion_id"] == "AC-01")  # sale del "Dado …" del criterio
+    assert llm.calls.count("matrix") >= 3  # AC-01 una vez; AC-02 con reintento
+    assert any("plantilla determinista para AC-02" in w for w in state.artifacts["matrix"].warnings)
 
 
 async def test_matrix_over_ten_criteria_fails_without_retrying(llm):
@@ -170,10 +173,10 @@ async def test_matrix_over_ten_criteria_fails_without_retrying(llm):
 async def test_missing_inputs_are_requested_and_then_used(llm):
     engine = engine_for(llm)
     state, plan = await engine.start(request=None, goals=["automation"], params={"requirement": "Consultar vehículos"}, actor="qa")
-    assert plan.status == "needs_input" and plan.missing_inputs == ["repository"]
-    assert "repositorio" in plan.next_actions(state)[0]["question"]
+    assert plan.status == "needs_input" and plan.missing_inputs == ["framework", "repository"]
+    assert any("repositorio" in a["question"] for a in plan.next_actions(state)) and any("stack" in a["question"] for a in plan.next_actions(state))
 
-    state, plan = await engine.request(state.id, request=None, goals=None, params={"repository": "org/qa-automation"}, actor="qa")
+    state, plan = await engine.request(state.id, request=None, goals=None, params={"repository": "org/qa-automation", "framework": "playwright"}, actor="qa")
     batch = state.artifacts["automation"].payload["batches"][0]
     assert plan.status == "completed" and batch["delivery"] == "pull_request_only" and len(batch["case_ids"]) == 6
 
@@ -182,7 +185,7 @@ async def test_pipeline_is_regenerated_when_scripts_appear(llm):
     engine = engine_for(llm)
     state, _ = await engine.start(request=None, goals=["pipeline"], params={}, actor="devops")
     assert "SucceededWithIssues" in state.artifacts["pipeline"].payload["yaml"]
-    state, plan = await engine.request(state.id, request="Genera los scripts de automatización", goals=None, params={"requirement": "Consultar vehículos", "repository": "org/qa"}, actor="qa")
+    state, plan = await engine.request(state.id, request="Genera los scripts de automatización", goals=None, params={"requirement": "Consultar vehículos", "repository": "org/qa", "framework": "playwright"}, actor="qa")
     pipeline = state.artifacts["pipeline"]
     assert pipeline.version == 2 and pipeline.based_on == {"automation": 1}
     assert all(s.startswith("npx playwright test") for s in pipeline.payload["scripts"])

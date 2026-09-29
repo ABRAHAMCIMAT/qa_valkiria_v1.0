@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 
 from valkiria.application.prompts import (
@@ -21,6 +22,7 @@ from valkiria.domain.models import (
 )
 from valkiria.llmops.lifecycle import Gate, LLMOpsLifecycle, Phase
 from valkiria.memory.service import with_memory
+from valkiria.providers.openai_compatible import LLMProviderError
 
 
 def _text(value) -> str:
@@ -134,12 +136,43 @@ def looks_broad(message: str) -> bool:
     return len(clauses) >= 3 and len(message.split()) >= 10
 
 
+CASE_KINDS = ("positive", "negative", "edge")
+_SUFFIX = {"positive": "P", "negative": "N", "edge": "E"}
+_PRIORITY = {"positive": "high", "negative": "high", "edge": "medium"}
+
+
 def matrix_user_prompt(story: UserStory, only: str | None = None) -> str:
-    """La historia más la lista exacta de casos que exige HU-004: un modelo pequeño cumple mejor una lista que una regla que debe calcular."""
-    slots = [f"TC-{c.id}-{suffix} ({c.id}, {kind})" for c in story.acceptance_criteria if only in (None, c.id)
-             for suffix, kind in (("P", "positive"), ("N", "negative"), ("E", "edge"))]
-    return (story.model_dump_json(include={"title", "description", "business_rules", "acceptance_criteria"})
-            + f"\n\nGenera exactamente estos {len(slots)} casos, uno por línea de esta lista:\n" + "\n".join(slots))
+    """Contexto mínimo para diseñar los casos de un criterio: la historia, sus reglas y el criterio."""
+    criteria = [c for c in story.acceptance_criteria if only in (None, c.id)]
+    rules = "; ".join(story.business_rules) or "ninguna"
+    return f"Historia: {story.title}. {story.description}\nReglas de negocio: {rules}\n" + "\n".join(f"Criterio {c.id}: {c.text}" for c in criteria)
+
+
+def _preconditions(criterion_text: str) -> list[str]:
+    """HU-004, regla 3: la precondición sale del "Dado …" del criterio."""
+    match = re.match(r"(?is)\s*dad[oa]s?\s+(.+?)(?:,\s*|\s+)cuando\b", criterion_text)
+    return [match.group(1).strip().rstrip(",")] if match else []
+
+
+def cases_from_compact(data: dict, criterion) -> list[dict]:
+    """Arma los casos de un criterio desde el formato compacto; vacío si el modelo no entregó los tres tipos."""
+    cases = []
+    for kind in CASE_KINDS:
+        item = data.get(kind) if isinstance(data.get(kind), dict) else None
+        if not item or not _text(item.get("scenario") or "").strip() or not _text(item.get("expected") or item.get("expected_result") or "").strip():
+            return []
+        cases.append({"id": f"TC-{criterion.id}-{_SUFFIX[kind]}", "criterion_id": criterion.id, "scenario": _text(item["scenario"]).strip(),
+                      "preconditions": _preconditions(criterion.text), "steps": [_text(x) for x in _as_list(item.get("steps")) if _text(x).strip()][:4],
+                      "data": item.get("data") if isinstance(item.get("data"), dict) else {},
+                      "expected_result": _text(item.get("expected") or item.get("expected_result")).strip(), "priority": _PRIORITY[kind], "type": kind})
+    return cases
+
+
+def template_case(criterion, kind: str) -> dict:
+    label = {"positive": "comportamiento válido", "negative": "comportamiento inválido", "edge": "valores límite"}[kind]
+    return {"id": f"TC-{criterion.id}-{_SUFFIX[kind]}", "criterion_id": criterion.id, "scenario": f"{criterion.text} ({label})", "preconditions": _preconditions(criterion.text),
+            "steps": [], "data": {}, "expected_result": criterion.text if kind == "positive" else "El sistema rechaza o maneja el caso sin error",
+            "priority": _PRIORITY[kind], "type": kind, "template": True}
 
 
 def _clean_reply(reply: str) -> str:
@@ -166,8 +199,15 @@ def _story_changes(before: UserStory, after: UserStory) -> dict:
 class ValkiriaService:
     """Orquestador de casos de uso; mantiene el transporte fuera del dominio."""
 
-    def __init__(self, llm, audit, metrics, stories, azure=None):
+    def __init__(self, llm, audit, metrics, stories, azure=None, max_parallel: int = 4, synthetic_app_base_url: str = "http://localhost:8090",
+                 web_runner=None, synthetic_transport=None):
         self.llm = llm
+        # Ejecución de scripts (HU-010): app sintética, runner web opcional y transporte inyectable para pruebas.
+        self.synthetic_app_base_url = synthetic_app_base_url
+        self.web_runner = web_runner
+        self.synthetic_transport = synthetic_transport
+        # Límite de llamadas simultáneas al modelo (la matriz genera cada criterio en paralelo).
+        self._parallel = asyncio.Semaphore(max_parallel)
         self.audit = audit
         self.metrics = metrics
         self.stories = stories
@@ -317,25 +357,33 @@ class ValkiriaService:
                 suggestion = _text(data.get("suggestion") or data.get("sugerencia") or "").strip()
                 criterion["suggestion"] = suggestion or None
 
+    async def matrix_cases(self, story: UserStory, criterion, *, memory: str = "") -> list[dict]:
+        """Los 3 casos (positivo, negativo, borde) de un criterio; un reintento y, si falla, plantilla declarada."""
+        async with self._parallel:
+            for _ in range(2):
+                try:
+                    data = await self.llm.generate_json(system=MATRIX_SYSTEM, user=with_memory(matrix_user_prompt(story, only=criterion.id), memory),
+                                                        schema={"type": "object"})
+                except (LLMProviderError, TimeoutError):
+                    continue
+                cases = cases_from_compact(data, criterion)
+                if cases:
+                    return cases
+        return [template_case(criterion, kind) for kind in CASE_KINDS]
+
     async def generate_matrix(self, story: UserStory, actor: str, *, memory: str = "") -> TestMatrix:
         ctx = self._context(actor)
         await self.ops.start(ctx, "generate_matrix", ArtifactType.TEST_MATRIX)
         try:
             await self._ground(ctx)
-            # Por criterio: 3 casos por llamada caben holgados en el tiempo límite (RT-04) y el modelo se enfoca en un solo criterio.
-            cases: list[dict] = []
-            for criterion in story.acceptance_criteria:
-                data = await self.llm.generate_json(system=MATRIX_SYSTEM, user=with_memory(matrix_user_prompt(story, only=criterion.id), memory),
-                                                    schema=TestMatrix.model_json_schema())
-                returned = _normalize_matrix(data)["cases"]
-                # Se pidió un solo criterio: si el modelo no lo marcó bien, sus casos se asignan a ese criterio.
-                cases += [c for c in returned if c.get("criterion_id") == criterion.id] or [{**c, "criterion_id": criterion.id} for c in returned[:3]]
-            seen: set[str] = set()
-            for case in cases:
-                while case["id"] in seen:
-                    case["id"] = f"{case['id']}-{case['criterion_id']}"
-                seen.add(case["id"])
-            data = {"cases": cases[:30], "story_id": story.id}
+            # Por criterio y en paralelo, en formato compacto: el modelo solo redacta escenario, pasos, resultado y datos;
+            # id, tipo, criterio, prioridad y precondiciones los arma el código (HU-004, regla 3). Así la cobertura
+            # positivo/negativo/borde queda garantizada por construcción y la salida del modelo se reduce a la mitad.
+            groups = await asyncio.gather(*(self.matrix_cases(story, criterion, memory=memory) for criterion in story.acceptance_criteria))
+            if all(case.get("template") for group in groups for case in group):
+                # RT-04: si el modelo no respondió para ningún criterio, no se entrega una matriz de plantillas: se informa y se reintenta.
+                raise LLMProviderError("llm_unavailable", "El modelo no respondió para generar la matriz.")
+            data = {"cases": [case for group in groups for case in group][:30], "story_id": story.id}
             result = TestMatrix.model_validate(data)
             await self.ops.record(ctx, Phase.GENERATION, "test_matrix", "draft_created", ArtifactType.TEST_MATRIX, str(result.id))
             await self._skip_human_release_gates(ctx, "el caso de uso solo genera una matriz en borrador")

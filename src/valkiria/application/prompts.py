@@ -15,7 +15,7 @@ Cada cambio de texto incrementa PROMPT_VERSION, que queda registrada en los arte
 Antes de activar un cambio, mídelo con `evals/prompt_eval.py` contra el modelo real y compáralo con la versión anterior.
 """
 
-PROMPT_VERSION = "v2"
+PROMPT_VERSION = "v3"
 
 # Cómo conversa Valkiria: se comparte entre el chat y el asistente para que el trato sea el mismo en toda la interfaz.
 CONVERSATION_STYLE = (
@@ -69,7 +69,8 @@ REVISION_SYSTEM = (
     "2. Copia literal todo lo demás: el mismo title, description, business_rules y los criterios no afectados con sus mismos ids.\n"
     "3. Conserva la plantilla: description \"Como …, quiero …, para …\" y criterios \"Dado …, cuando …, entonces …\".\n"
     "4. Un criterio nuevo continúa la numeración (si el último es AC-03, el nuevo es AC-04).\n"
-    "5. No hagas cambios que no se pidieron.\n\n"
+    "5. Máximo 6 criterios. Si una sugerencia pide dividir la historia, conserva solo el flujo principal; no agregues los de las otras historias.\n"
+    "6. No hagas cambios que no se pidieron.\n\n"
     "Responde solo con el JSON de la historia COMPLETA, con las claves title, description, business_rules y acceptance_criteria."
 )
 
@@ -80,7 +81,8 @@ STORY_EDIT_SYSTEM = (
     "observable) y agrega un criterio de error si falta, sin cambiar el alcance.\n"
     "2. Copia literal lo que la instrucción no toca, con los mismos ids. Un criterio nuevo continúa la numeración.\n"
     "3. Conserva la plantilla: description \"Como …, quiero …, para …\". No inventes cifras, plazos ni sistemas. No agregues códigos como \"HU-003A\" al título.\n"
-    "4. changes: de 1 a 3 frases cortas con lo que cambió respecto a la versión anterior.\n\n"
+    "4. Máximo 6 criterios (HU-003B). Si la instrucción pide dividir o reducir, conserva solo el flujo principal.\n"
+    "5. changes: de 1 a 3 frases cortas con lo que cambió respecto a la versión anterior.\n\n"
     "Responde solo JSON con las claves title, description, business_rules, acceptance_criteria y changes."
 )
 
@@ -141,20 +143,27 @@ INVEST_SUGGESTION_SYSTEM = (
 )
 
 MATRIX_SYSTEM = (
-    "Eres analista de QA senior. Diseñas la matriz de casos de prueba de una historia de usuario, en español (HU-004).\n\n"
-    "Recibirás la historia y la lista exacta de casos requeridos: genera todos, uno por cada línea de la lista, sin omitir ninguno.\n\n"
-    "Reglas:\n"
-    "1. Por CADA criterio de aceptación, exactamente 3 casos: uno \"positive\" (flujo válido), uno \"negative\" (dato o estado inválido) "
-    "y uno \"edge\" (valor límite o situación de borde).\n"
-    "2. criterion_id: el id exacto del criterio (\"AC-01\"). id del caso: TC-<id del criterio>-P, -N o -E (\"TC-AC-01-P\").\n"
-    "3. scenario: qué se prueba, en una frase. expected_result: un resultado observable.\n"
-    "4. Sé conciso: steps de 2 a 3 pasos cortos, preconditions de 0 a 2, data solo si aplica (sintética, nunca datos personales reales).\n"
-    "5. priority: \"high\" para el flujo principal y los errores críticos; \"medium\" o \"low\" para el resto.\n"
-    "6. type solo \"positive\", \"negative\" o \"edge\"; priority solo \"high\", \"medium\" o \"low\".\n\n"
-    "Responde solo JSON con la clave cases. Ejemplo de un caso:\n"
-    '{"id": "TC-AC-01-P", "criterion_id": "AC-01", "scenario": "Solicitar recuperación con un correo registrado", '
-    '"preconditions": ["Existe la cuenta cliente@example.test"], "steps": ["Abrir recuperar contraseña", "Ingresar el correo", "Enviar la solicitud"], '
-    '"data": {"correo": "cliente@example.test"}, "expected_result": "Se envía el enlace de recuperación al correo", "priority": "high", "type": "positive"}'
+    "Eres analista de QA senior. Diseñas los 3 casos de prueba de UN criterio de aceptación, en español (HU-004): positive (flujo válido), "
+    "negative (dato o estado inválido) y edge (valor límite o situación de borde). Sé breve: scenario en una frase, steps de 2 a 3 pasos cortos, "
+    "expected con un resultado observable, data solo con datos sintéticos si aplican (si no, {}); nunca datos personales reales.\n"
+    "El id, el tipo, la prioridad y las precondiciones los completa el sistema: no los escribas.\n"
+    "Responde solo JSON compacto, en una línea. Ejemplo para el criterio \"Dado un correo registrado, cuando solicito recuperar la contraseña, entonces recibo un enlace\":\n"
+    '{"positive": {"scenario": "Recuperar con correo registrado", "steps": ["Abrir recuperar contraseña", "Enviar cliente@example.test"], '
+    '"expected": "Llega el enlace de recuperación", "data": {"correo": "cliente@example.test"}}, '
+    '"negative": {"scenario": "Recuperar con correo no registrado", "steps": ["Abrir recuperar contraseña", "Enviar nadie@example.test"], '
+    '"expected": "Mensaje genérico sin revelar la cuenta", "data": {"correo": "nadie@example.test"}}, '
+    '"edge": {"scenario": "Correo con mayúsculas y espacios", "steps": ["Enviar \' Cliente@Example.test \'"], "expected": "Se normaliza y llega el enlace", "data": {}}}'
+)
+
+SQL_VALIDATION_SYSTEM = (
+    "Eres QA de datos. Escribes de 1 a 3 consultas SQL de SOLO LECTURA para validar, contra la base sintética de Nissan, las reglas de datos de la "
+    "historia de usuario (HU-011). Esquema: vehicles(vehicle_id, model, year, price, stock); dealers(dealer_id, name, region, active); "
+    "customers(customer_id, name, email); inventory(inventory_id, vehicle_id, dealer_id, available); "
+    "sales_orders(order_id, dealer_id, vehicle_id, customer_id, status, total); service_appointments(appointment_id, customer_id, dealer_id, status).\n"
+    "Reglas: solo SELECT (nunca INSERT, UPDATE, DELETE ni DDL), SQL estándar compatible con PostgreSQL y SQLite, LIMIT 20 en cada consulta, "
+    "y purpose con la regla de la historia que verifica.\n"
+    'Responde solo JSON: {"queries": [{"purpose": "Ningún vehículo sin stock aparece como disponible en inventario", '
+    '"sql": "SELECT i.inventory_id, v.model, v.stock FROM inventory i JOIN vehicles v ON v.vehicle_id = i.vehicle_id WHERE i.available = TRUE AND v.stock <= 0 LIMIT 20"}]}'
 )
 
 RISK_SYSTEM = (
@@ -238,7 +247,7 @@ STORY_SPLIT_SYSTEM = (
 
 _TOKEN_BUDGET = {
     STORY_SYSTEM: 1200, REVISION_SYSTEM: 1200, STORY_EDIT_SYSTEM: 1300, CHAT_SYSTEM: 1400, STORY_SPLIT_SYSTEM: 700, INVEST_SYSTEM: 1400, INVEST_SUGGESTION_SYSTEM: 250,
-    MATRIX_SYSTEM: 1200, RISK_SYSTEM: 600, GENERATION_SYSTEM: 600, ASSISTANT_COMPOSE_SYSTEM: 300, ASSISTANT_ARGS_SYSTEM: 200,
+    MATRIX_SYSTEM: 700, SQL_VALIDATION_SYSTEM: 500, RISK_SYSTEM: 600, GENERATION_SYSTEM: 600, ASSISTANT_COMPOSE_SYSTEM: 300, ASSISTANT_ARGS_SYSTEM: 200,
 }
 _ASSISTANT_PREFIX = ASSISTANT_SYSTEM.split("{")[0]
 

@@ -4,7 +4,7 @@ from valkiria.application import prompts
 from valkiria.providers.openai_compatible import LLMProviderError
 
 # El LLM simulado reconoce cada tarea por su prompt de sistema exacto: reescribir un prompt no rompe las pruebas.
-_BY_PROMPT = {prompts.STORY_EDIT_SYSTEM: "edit", prompts.STORY_SPLIT_SYSTEM: "split", prompts.INVEST_SUGGESTION_SYSTEM: "suggestion", prompts.ASSISTANT_ARGS_SYSTEM: "args", prompts.ASSISTANT_COMPOSE_SYSTEM: "compose", prompts.CHAT_SYSTEM: "chat", prompts.REVISION_SYSTEM: "revision",
+_BY_PROMPT = {prompts.SQL_VALIDATION_SYSTEM: "sql", prompts.STORY_EDIT_SYSTEM: "edit", prompts.STORY_SPLIT_SYSTEM: "split", prompts.INVEST_SUGGESTION_SYSTEM: "suggestion", prompts.ASSISTANT_ARGS_SYSTEM: "args", prompts.ASSISTANT_COMPOSE_SYSTEM: "compose", prompts.CHAT_SYSTEM: "chat", prompts.REVISION_SYSTEM: "revision",
               prompts.STORY_SYSTEM: "story", prompts.INVEST_SYSTEM: "invest", prompts.MATRIX_SYSTEM: "matrix", prompts.RISK_SYSTEM: "risk"}
 _ASSISTANT_PREFIX = prompts.ASSISTANT_SYSTEM.split("{")[0]
 
@@ -54,6 +54,10 @@ class ScriptedLLM:
         if kind == "args":
             self.calls.append("args")
             return self.args_script.pop(0) if self.args_script else {}
+        if kind == "sql":
+            self.calls.append("sql")
+            return {"queries": [{"purpose": "Vehículos disponibles con stock", "sql": "SELECT vehicle_id, model, stock FROM vehicles WHERE stock > 0 LIMIT 20"},
+                                {"purpose": "Intento de mutación", "sql": "DELETE FROM vehicles"}]}
         if kind == "edit":
             self.calls.append("edit")
             self.prompts.append(("edit", user))
@@ -92,4 +96,10 @@ class ScriptedLLM:
             raise LLMProviderError("llm_http_error", "caído")
         if kind == "revision":
             return {**self.story, "acceptance_criteria": [*self.story["acceptance_criteria"], {"id": "AC-03", "text": "Dado stock 1, cuando consulto, entonces aparece"}]}
-        return {"story": self.story, "invest": self.invest, "matrix": self.matrix, "risk": {"level": "high", "justification": "Integración crítica", "mitigation": "Regresión"}}[kind]
+        if kind == "matrix":
+            # Formato compacto: los casos del criterio solicitado ("Criterio AC-01: …"), por tipo.
+            import re
+            requested = re.search(r"Criterio (AC-\d+)", user)
+            by_type = {c["type"]: c for c in self.matrix["cases"] if requested and c["criterion_id"] == requested.group(1)}
+            return {t: {"scenario": c["scenario"], "steps": ["Paso 1"], "expected": c["expected_result"], "data": {}} for t, c in by_type.items()}
+        return {"story": self.story, "invest": self.invest, "risk": {"level": "high", "justification": "Integración crítica", "mitigation": "Regresión"}}[kind]

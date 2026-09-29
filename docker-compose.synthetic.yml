@@ -83,6 +83,9 @@ services:
 
   ollama:
     image: ollama/ollama:latest
+    environment:
+      # Atiende varias peticiones a la vez: la matriz se genera por criterio en paralelo.
+      OLLAMA_NUM_PARALLEL: "4"
     ports:
       - "127.0.0.1:11434:11434"
     profiles: ["llm"]

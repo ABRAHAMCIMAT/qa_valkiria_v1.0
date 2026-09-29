@@ -17,6 +17,12 @@ from valkiria.application.qa_artifacts import (
     PolicyViolation,
     automation_batch,
 )
+from valkiria.application.script_generation import (
+    API_FRAMEWORKS,
+    WEB_FRAMEWORKS,
+    generate_scripts,
+    scan_scripts,
+)
 from valkiria.application.sql_dialect import (
     split_statements,
     statement_keyword,
@@ -66,7 +72,7 @@ PLATFORM_PROFILES: dict[str, dict[str, Any]] = {
     "api": {
         "language": "javascript",
         "default_tool": "postman-newman",
-        "tools": ["postman-newman", "restassured"],
+        "tools": ["postman-newman", "restassured", "playwright"],
         "runtime": "nodejs",
     },
 }
@@ -328,12 +334,21 @@ def generate_scripts_for_batch(cases: list[dict[str, Any]], *, framework: str, p
     return result
 
 
-def create_automation_batch(*, cases: list[dict[str, Any]], framework: str, platform: str, repository: str, base_branch: str, matrix_status: str) -> dict[str, Any]:
+def create_automation_batch(*, cases: list[dict[str, Any]], framework: str, platform: str, repository: str, base_branch: str, matrix_status: str,
+                            feature: str = "Aplicacion") -> dict[str, Any]:
     if len(cases) > MAX_AUTOMATION_BATCH:
         return {"status": "requires_split", "max_cases": MAX_AUTOMATION_BATCH, "received": len(cases), "suggestion": "Divide la selección en lotes de máximo 15 casos."}
     selection = select_execution_tool(platform, framework)
     batch = automation_batch(cases, framework=framework, repository=repository, base_branch=base_branch)
-    batch.update({"platform": selection["platform"], "language": selection["language"], "execution_tool": selection["tool"], "tooling": selection, "cases": cases, "matrix_status": matrix_status.lower(), "scripts": generate_scripts_for_batch(cases, framework=framework, platform=platform), "pr_required": True})
+    normalized = framework.lower()
+    if (selection["platform"] == "web" and normalized in WEB_FRAMEWORKS) or (selection["platform"] == "api" and normalized in API_FRAMEWORKS):
+        # Código real por caso: Page Object, datos externalizados y verificación del resultado esperado (HU-009, reglas 3 y 4).
+        scripts = generate_scripts(cases, framework=normalized, platform=selection["platform"], feature=feature)
+    else:
+        scripts = generate_scripts_for_batch(cases, framework=framework, platform=platform)
+    quality = scan_scripts(scripts, [str(c.get("id")) for c in cases])
+    batch.update({"platform": selection["platform"], "language": selection["language"], "execution_tool": selection["tool"], "tooling": selection, "cases": cases,
+                  "matrix_status": matrix_status.lower(), "scripts": scripts, "quality": quality, "pr_required": True, "pr_allowed": quality["pr_allowed"]})
     return batch
 
 

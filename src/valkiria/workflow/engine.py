@@ -39,6 +39,10 @@ from valkiria.workflow.state import Approval, StepFailure, WorkflowState, Workfl
 from valkiria.workflow.steps import EXECUTORS, StepError
 
 DEFAULT_GOALS = ["story", "invest"]
+# Datos del usuario que determinan el resultado de cada paso (además de sus dependencias).
+INPUT_KEYS = {"automation": ("framework", "platform", "repository", "base_branch"),
+              "performance_design": ("performance_users", "performance_duration_seconds", "performance_sla_ms", "performance_tool", "performance_type"),
+              "azure_work_item": ("azure_project",)}
 EDITABLE = {"story": UserStory, "matrix": TestMatrix}
 
 
@@ -225,7 +229,8 @@ class WorkflowEngine:
                 state.think("failed", "Error interno no previsto; el resto del flujo continúa.", key)
                 return False
             record = state.put_artifact(artifact_of(key), output.payload, produced_by=key, based_on=output.based_on, warnings=output.warnings, memory_used=describe(recalled),
-                                        assumptions=output.assumptions, model=getattr(self.service.llm, "model_name", None), prompt_version=PROMPT_VERSION)
+                                        assumptions=output.assumptions, model=getattr(self.service.llm, "model_name", None), prompt_version=PROMPT_VERSION,
+                                        inputs={name: state.params[name] for name in INPUT_KEYS.get(key, ()) if name in state.params})
             state.think("executed", f"{CAPABILITIES[key].hu}: {output.summary} Resultado: '{record.key}' v{record.version}.", key)
             return True
         return False
