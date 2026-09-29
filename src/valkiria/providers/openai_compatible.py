@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -19,13 +20,16 @@ class LLMProviderError(RuntimeError):
 
 class OpenAICompatibleLLM:
     # RT-04: si el modelo no responde en 60 s, el usuario recibe un error claro y puede reintentar.
-    def __init__(self, base_url: str, model_name: str, api_key: str | None = None, timeout_seconds: float = 60, auth_header: str = "authorization"):
+    def __init__(self, base_url: str, model_name: str, api_key: str | None = None, timeout_seconds: float = 60, auth_header: str = "authorization",
+                 token_budget: Callable[[str], int] | None = None):
         self.base_url = base_url.rstrip("/")
         self.model_name = model_name
         self.api_key = api_key
         # "authorization" (Bearer) sirve para Ollama, vLLM y OpenAI; Azure OpenAI con llave usa "api-key".
         self.auth_header = auth_header.lower()
         self.timeout_seconds = timeout_seconds
+        # Tope de tokens de salida según la tarea (el prompt de sistema): evita bucles del modo JSON hasta el tiempo límite.
+        self.token_budget = token_budget
         self.logger = get_logger("valkiria.llm")
 
     def _auth_headers(self) -> dict[str, str]:
@@ -40,6 +44,8 @@ class OpenAICompatibleLLM:
         # RT-05: credenciales, tokens y correos no se envían al modelo aunque el usuario los escriba.
         payload = {"model": self.model_name, "messages": [{"role": "system", "content": system}, {"role": "user", "content": redact(user)}], "temperature": 0.1,
                    "response_format": {"type": "json_object"}}
+        if self.token_budget:
+            payload["max_tokens"] = self.token_budget(system)
         try:
             async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
                 response = await client.post(f"{self.base_url}/chat/completions", json=payload, headers=headers)

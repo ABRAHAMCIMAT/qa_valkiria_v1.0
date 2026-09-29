@@ -243,21 +243,23 @@ def _sum_glosario(r: dict[str, Any]) -> Summary:
 
 def _sum_inventario(r: dict[str, Any]) -> Summary:
     available, empty = r["disponibles"], r["sin_stock"]
-    text = ("Vehículos disponibles: " + ", ".join(available) + "." if available else "No hay vehículos con stock.") + (f" Sin stock: {', '.join(empty)}." if empty else "")
-    anchors = tuple(item.split()[0] for item in available) or ("no hay",)
-    return Summary(text + " (Fuente: app sintética de Nissan.)", anchors, tuple((item.split()[0], r"sin stock|agotad|no disponible|stock 0|sin existencia") for item in empty))
+    # Consultas de datos: la conclusión calculada es la respuesta (redactada de forma natural); así no hay nombres repetidos ni omitidos.
+    text = ("Los vehículos disponibles son: " + ", ".join(available) + "." if available else "Por ahora no hay vehículos con stock.") + (
+        f" Sin stock: {', '.join(empty)}." if empty else "")
+    return Summary(text + " (Datos de la app sintética de Nissan.)", verbatim=True)
 
 
 def _sum_concesionarios(r: dict[str, Any]) -> Summary:
     active, inactive = r["activos"], r["inactivos"]
-    text = ("Concesionarios activos: " + ", ".join(active) + "." if active else "No hay concesionarios activos.") + (f" Inactivos: {', '.join(inactive)}." if inactive else "")
-    return Summary(text + " (Fuente: app sintética de Nissan.)", tuple(_names(active)) or ("no hay",), tuple((name, "inactiv") for name in _names(inactive)))
+    text = ("Los concesionarios activos son: " + ", ".join(active) + "." if active else "Por ahora no hay concesionarios activos.") + (
+        f" Inactivos: {', '.join(inactive)}." if inactive else "")
+    return Summary(text + " (Datos de la app sintética de Nissan.)", tuple(_names(active)) or ("no hay",), tuple((name, "inactiv") for name in _names(inactive)), verbatim=True)
 
 
 def _sum_citas(r: dict[str, Any]) -> Summary:
     items = r["citas_servicio"]
     detail = "; ".join(f"cita {c.get('appointment_id')} en estado {c.get('status')}" for c in items)
-    return Summary(f"Hay {len(items)} cita(s) de servicio registradas" + (f": {detail}." if items else ".") + " (Fuente: app sintética de Nissan.)", (str(len(items)),))
+    return Summary(f"Hay {len(items)} cita(s) de servicio registradas" + (f": {detail}." if items else ".") + " (Datos de la app sintética de Nissan.)", verbatim=True)
 
 
 def _sum_sql(r: dict[str, Any]) -> Summary:

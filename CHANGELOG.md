@@ -23,7 +23,10 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/).
   - saludos, agradecimientos y molestias se responden conversando;
   - se usa el resumen de turnos antiguos;
   - la interfaz muestra la división de HU y la opción de reintentar.
+- Presupuesto de tokens de salida por prompt, que evita que el modo JSON se quede en bucle hasta el tiempo límite.
+- `STORY_SPLIT_SYSTEM`: la división se verifica con una tarea acotada, aunque el chat elija "crear" o devuelva una división vacía. Una HU nueva nunca se redacta con la HU en curso como contexto.
 - Asistente:
+  - las consultas de datos responden con la conclusión calculada;
   - extracción determinista de valores cerrados;
   - preguntas de aclaración;
   - glosario literal para conceptos;

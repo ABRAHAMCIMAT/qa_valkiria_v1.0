@@ -25,6 +25,7 @@ from valkiria.application.automation_execution import (
     select_execution_tool,
     suggest_database_tool,
 )
+from valkiria.application.prompts import token_budget
 from valkiria.application.use_cases import ValkiriaService
 from valkiria.assistant import ReasoningAssistant, build_toolbox, route_message
 from valkiria.assistant.capabilities import capability_summary
@@ -184,7 +185,7 @@ def create_app(llm=None):
     executions = InMemoryExecutionStore()
     reports = InMemoryReportStore()
     llm = llm or OpenAICompatibleLLM(settings.llm_base_url, settings.llm_model, settings.secret("llm_api_key"), timeout_seconds=settings.llm_timeout_seconds,
-                                     auth_header=settings.llm_auth_header)
+                                     auth_header=settings.llm_auth_header, token_budget=token_budget)
     database_executor = build_synthetic_executor(settings.db_profile, settings.secret("synthetic_database_url")) if settings.mode == "synthetic" else None
     automation_runner = PlaywrightRunner(settings.automation_headless, settings.automation_timeout_seconds) if settings.automation_execute and settings.automation_runner == "playwright" else None
     service = ValkiriaService(llm, audit, metrics, stories)

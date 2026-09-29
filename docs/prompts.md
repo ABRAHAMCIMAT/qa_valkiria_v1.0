@@ -17,6 +17,8 @@ Todos los prompts viven en `src/valkiria/application/prompts.py` y se versionan 
 | Prompt | HU y reglas | Garantía en código |
 |---|---|---|
 | `STORY_SYSTEM` | HU-003B: plantilla de 4 componentes, de 3 a 6 criterios Dado/Cuando/Entonces, al menos un criterio de error, reglas solo deducibles, supuestos (máximo 3, regla 3) y división de requerimientos amplios (regla 2) | Validación con `UserStory`. Los supuestos se muestran y deben confirmarse antes de aprobar (regla 4); las HU sugeridas quedan como advertencia |
+| `STORY_SPLIT_SYSTEM` | HU-003B regla 2: de 2 a 5 historias independientes, cada una con un solo flujo y un actor | Se invoca cuando el mensaje enumera 3 o más funcionalidades (`looks_broad`), aunque el chat haya elegido "crear" o haya devuelto una división vacía |
+| `INVEST_SUGGESTION_SYSTEM` | HU-002 regla 2: una sugerencia accionable para un criterio concreto | Completa las sugerencias que el modelo omite al evaluar los 6 criterios |
 | `REVISION_SYSTEM` | HU-003A: solo las sugerencias aprobadas, el resto literal, se conserva la plantilla | Se valida el esquema y se calcula la lista de cambios |
 | `CHAT_SYSTEM` | HU-003B (crear, dividir de 2 a 5 HU, supuestos, hasta 2 preguntas), ajustes que conservan lo no pedido y estilo conversacional | Intención inválida → `conversar`. HU incompleta → se regenera con `STORY_SYSTEM`. Se limpia cualquier JSON pegado en la respuesta. Una falla del modelo nunca rompe el chat (RT-04) |
 | `INVEST_SYSTEM` | HU-002: los 6 criterios con definición, estado exacto, justificación que cita la HU y sugerencia accionable solo si no cumple (reglas 1 y 2) | `validate_invest` con una corrección; las sugerencias sobre criterios que cumplen no exigen decisión |
@@ -25,6 +27,10 @@ Todos los prompts viven en `src/valkiria/application/prompts.py` y se versionan 
 | `GENERATION_SYSTEM` | Plan verificable del orquestador, con 3 claves exactas y sin inventar resultados | Esquema requerido |
 | `ASSISTANT_SYSTEM` | Herramientas reales. Pide los datos obligatorios faltantes, por ejemplo el SLA (HU-008A, regla 3). Rechaza con amabilidad lo que está fuera del dominio | Catálogo cerrado, verificación de fidelidad, extracción determinista de valores cerrados y preguntas de aclaración |
 | `ASSISTANT_COMPOSE_SYSTEM` | Redacción de 1 a 3 frases con los datos verificados, sin omitir lo inactivo o sin stock | `faithful()` y, si no se cumple, la conclusión calculada |
+
+**Presupuesto de tokens por prompt** (`token_budget`): en modo JSON, Llama 3.2 a veces entra en un bucle de espacios en blanco hasta agotar el tiempo. Un tope por tarea (500 para las decisiones del asistente, 3500 para la matriz, etc.) corta ese caso en segundos y deja actuar a la recuperación. En vivo, la consulta de concesionarios bajó de 63-69 s a 5-21 s.
+
+**Consultas de datos** (inventario, concesionarios, citas): la respuesta es la conclusión calculada por la herramienta, redactada de forma natural. Así se evitan nombres repetidos u omitidos por el modelo.
 
 Transversales:
 - **RT-04:** tiempo límite de 60 s (`VALKIRIA_LLM_TIMEOUT_SECONDS`). Si el modelo falla, el chat responde con un mensaje claro, el `trace_id` y la opción de reintentar, sin perder la conversación.

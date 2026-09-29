@@ -210,3 +210,30 @@ ASSISTANT_ARGS_SYSTEM = (
     'Ejemplo: herramienta disenar_prueba_performance y petición "prueba para 50 usuarios, 5 minutos, SLA 300 ms" → '
     '{"usuarios": 50, "duracion_segundos": 300, "sla_ms": 300}'
 )
+
+
+# --- Presupuesto de tokens de salida por prompt ---------------------------------------------------------
+# En modo JSON, un modelo pequeño a veces entra en un bucle (espacios en blanco sin fin) hasta agotar el tiempo.
+# Un tope por tarea corta ese caso en segundos y deja actuar a la recuperación (reintento, corrección o respuesta
+# determinista), en lugar de esperar los 60 s de RT-04.
+STORY_SPLIT_SYSTEM = (
+    "Eres analista de QA senior. Divides un requerimiento amplio en historias de usuario independientes y testeables por separado (HU-003B, regla 2).\n"
+    "Cada historia cubre un solo flujo con un actor principal. Propón de 2 a 5, con title (verbo en infinitivo, máximo 10 palabras) y description "
+    "(\"Como <rol>, quiero <acción>, para <beneficio>.\"). Si en realidad es un solo flujo, responde con una sola historia. En español.\n"
+    'Responde solo JSON: {"split": [{"title": "Recuperar contraseña por correo", "description": "Como cliente registrado, quiero recuperar mi contraseña '
+    'por correo, para volver a entrar a mi cuenta."}, {"title": "Cambiar contraseña desde el perfil", "description": "Como cliente, quiero cambiar mi '
+    'contraseña desde mi perfil, para mantener segura mi cuenta."}]}'
+)
+
+_TOKEN_BUDGET = {
+    STORY_SYSTEM: 1200, REVISION_SYSTEM: 1200, CHAT_SYSTEM: 1400, STORY_SPLIT_SYSTEM: 700, INVEST_SYSTEM: 1400, INVEST_SUGGESTION_SYSTEM: 250,
+    MATRIX_SYSTEM: 3500, RISK_SYSTEM: 600, GENERATION_SYSTEM: 600, ASSISTANT_COMPOSE_SYSTEM: 300, ASSISTANT_ARGS_SYSTEM: 200,
+}
+_ASSISTANT_PREFIX = ASSISTANT_SYSTEM.split("{")[0]
+
+
+def token_budget(system: str) -> int:
+    """Máximo de tokens de salida para el prompt de sistema dado."""
+    if system in _TOKEN_BUDGET:
+        return _TOKEN_BUDGET[system]
+    return 500 if system.startswith(_ASSISTANT_PREFIX) else 2000

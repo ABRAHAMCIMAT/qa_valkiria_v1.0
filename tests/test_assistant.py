@@ -85,31 +85,30 @@ async def test_declares_honestly_what_it_cannot_do_and_lists_alternatives():
 
 
 async def test_refusing_after_getting_data_goes_to_verified_composition():
-    # Caso real con Llama 3.2: consultó el inventario y luego dijo que no podía.
+    # Caso real con Llama 3.2: consultó y luego dijo que no podía. Se redacta con los datos y se verifica.
     llm = ScriptedLLM()
-    llm.assistant_script = [{"accion": "usar_herramienta", "herramienta": "inventario_nissan", "argumentos": {}},
-                            {"accion": "no_puedo", "falta": "la capacidad de obtener datos de inventario"}]
-    llm.compose_script = [{"respuesta": "Hay Sentra (10) y Versa (3) disponibles."}]
-    answer = await assistant_for(llm).ask("¿Qué vehículos hay en inventario?")
-    assert answer.status == "answered" and answer.grounded and answer.mode == "llm" and "Sentra" in answer.answer
-    assert "Sentra (stock 10)" in llm.prompts[-1][1]  # la redacción recibe la conclusión calculada, no datos crudos
+    llm.assistant_script = [{"accion": "usar_herramienta", "herramienta": "herramienta_bd", "argumentos": {"motor": "oracle", "lenguaje": "java"}},
+                            {"accion": "no_puedo", "falta": "la capacidad de recomendar herramientas"}]
+    llm.compose_script = [{"respuesta": "Para Oracle con Java te recomiendo JDBC + Testcontainers, con Flyway o Liquibase para el esquema."}]
+    answer = await assistant_for(llm).ask("¿Qué herramienta uso para probar Oracle con Java?")
+    assert answer.status == "answered" and answer.grounded and answer.mode == "llm" and "JDBC" in answer.answer
+    assert "JDBC + Testcontainers" in llm.prompts[-1][1]  # la redacción recibe la conclusión calculada, no datos crudos
 
     stubborn = ScriptedLLM()
-    stubborn.assistant_script = [{"accion": "usar_herramienta", "herramienta": "inventario_nissan", "argumentos": {}}, {"accion": "no_puedo"}]
-    stubborn.compose_script = [{"respuesta": "No puedo consultar el inventario."}]
-    kept = await assistant_for(stubborn).ask("¿Qué vehículos hay en inventario?")
-    assert kept.status == "answered" and kept.mode == "tool" and kept.answer.startswith("Vehículos disponibles: Sentra (stock 10), Versa (stock 3).")
+    stubborn.assistant_script = [{"accion": "usar_herramienta", "herramienta": "herramienta_bd", "argumentos": {"motor": "oracle", "lenguaje": "java"}}, {"accion": "no_puedo"}]
+    stubborn.compose_script = [{"respuesta": "No puedo recomendar nada."}]
+    kept = await assistant_for(stubborn).ask("¿Qué herramienta uso para probar Oracle con Java?")
+    assert kept.status == "answered" and kept.mode == "tool" and kept.answer.startswith("Para oracle con java: JDBC + Testcontainers")
 
 
-async def test_unfaithful_drafts_are_replaced_by_the_verified_conclusion():
-    # Caso real: "Los concesionarios activos son aquellos listados como activos" (sin datos) y un inactivo presentado como activo.
+async def test_data_answers_are_the_verified_conclusion():
+    # Casos reales: "Los activos son aquellos listados", un inactivo presentado como activo, y "Apodaca y Apodaca".
     llm = ScriptedLLM()
     llm.assistant_script = [{"accion": "usar_herramienta", "herramienta": "concesionarios_nissan", "argumentos": {}},
-                            {"accion": "responder", "respuesta": "Los concesionarios activos son aquellos listados como activos."}]
-    llm.compose_script = [{"respuesta": "Activos: Apodaca y Centro."}]
+                            {"accion": "responder", "respuesta": "Los activos son Apodaca y Apodaca."}]
     answer = await assistant_for(llm).ask("¿Qué concesionarios están activos?")
-    assert answer.mode == "tool" and answer.answer.startswith("Concesionarios activos: Nissan Apodaca Sintético")
-    assert "Inactivos: Nissan Centro Sintético" in answer.answer
+    assert answer.mode == "tool" and answer.answer.startswith("Los concesionarios activos son: Nissan Apodaca Sintético")
+    assert "Inactivos: Nissan Centro Sintético" in answer.answer and "compose" not in llm.calls
 
 
 def test_faithfulness_rules():
@@ -285,7 +284,7 @@ async def test_repeated_calls_end_the_loop_with_the_observed_facts():
     answer = await assistant_for(llm, max_steps=3).ask("¿Qué concesionarios hay?")
     assert answer.steps[1].error.startswith("Consulta repetida")
     assert answer.status == "answered" and "Apodaca" in answer.answer
-    assert llm.calls == ["assistant", "assistant", "compose"]  # sin vueltas extra tras repetir la consulta
+    assert llm.calls == ["assistant", "assistant"]  # sin vueltas extra tras repetir la consulta
 
 
 async def test_model_outage_falls_back_to_a_direct_tool_or_an_honest_limit():

@@ -189,7 +189,11 @@ class ReasoningAssistant:
                               else "Antes de declarar que no puedes, revisa si alguna aplica: " + ", ".join(t.name for t in hints) + ".")
                     run.steps.append(Step(number=number, reason=reason, action="cannot", error=review))
                     continue
-                refused = _clean_missing(str(data.get("falta") or data.get("missing") or "")) or ""
+                refused = _clean_missing(str(data.get("falta") or data.get("missing") or ""))
+                # Si la "capacidad faltante" no tiene relación con la petición, el modelo copió el ejemplo: se usa la negativa genérica.
+                if refused and not set(tokens(refused)) & set(tokens(question)):
+                    refused = None
+                refused = refused or ""
                 run.steps.append(Step(number=number, reason=reason, action="cannot"))
                 break
             if action != "tool" or final_turn:
@@ -207,6 +211,10 @@ class ReasoningAssistant:
         if run.used:
             # Un borrador escrito antes de consultar cualquier herramienta es de memoria: no puede ser la respuesta final.
             return await self._compose(question, run, draft if draft_grounded else None, ctx)
+        if draft and not run.used and _REFUSAL.search(fold(draft)):
+            # Una negativa redactada por el modelo se convierte en la respuesta honesta estándar, con lo que sí se puede hacer.
+            return AssistantAnswer(status="unsupported", answer=honest_unsupported(question, missing=None, reason=None, toolbox=self.toolbox), steps=run.steps,
+                                   capabilities=capability_summary(self.toolbox), outputs=ctx.outputs)
         if draft and draft.rstrip().endswith("?"):
             # Una pregunta de aclaración (por ejemplo, pedir el SLA) no afirma nada: no lleva la nota de "no verificado".
             return AssistantAnswer(status="answered", answer=draft, steps=run.steps, outputs=ctx.outputs)

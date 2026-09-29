@@ -15,7 +15,7 @@ Ejecutada en macOS con Python 3.12.2 y Docker 29.8.1, con el código ya integrad
 | Docker daemon | `docker info` | Activo (Docker Desktop 29.8.1) |
 | Ruff | `ruff check src tests` | Sin errores |
 | Bandit | `bandit -q -c pyproject.toml -r src` | Sin hallazgos |
-| Unitarias | `pytest -q --ignore=tests/e2e` | 153 aprobadas (aisladas del `.env` local mediante `tests/conftest.py`) |
+| Unitarias | `pytest -q --ignore=tests/e2e` | 158 aprobadas (aisladas del `.env` local mediante `tests/conftest.py`) |
 | E2E sintética | `RUN_SYNTHETIC_E2E=1 pytest -v tests/e2e` | 5 aprobadas contra PostgreSQL 16 (flujo de la app sintética y mutaciones con límite); repetibles |
 | Paquete | `python -m build` | `valkiria-0.5.0-py3-none-any.whl` y `valkiria-0.5.0.tar.gz`; el wheel se instala y arranca en un entorno limpio |
 | Imagen Docker | `docker build -f deploy/docker/Dockerfile .` | 303 MB, usuario `uid=10001`, healthcheck activo |
@@ -89,7 +89,8 @@ Notas:
 - **INVEST:** Llama 3.2 omite el campo `suggestion` al evaluar los seis criterios a la vez (0 % en la salida cruda con ambas versiones). El código pide la sugerencia faltante con una tarea acotada (`INVEST_SUGGESTION_SYSTEM`), y el resultado final cumple HU-002 en el 100 % de los casos.
 - **Chat:** en el 56 % de los casos de crear o ajustar, el modelo entrega la HU completa directamente (v1: 67 %). En los demás, el código la regenera con `STORY_SYSTEM` y limpia la respuesta, así que la persona siempre recibe la HU.
 - **Asistente:** el único caso que falló en v2 (herramienta de automatización móvil) se corrigió después. El código extrae de la petición los valores cerrados, solo envía los datos obligatorios al forzar una herramienta y descarta los borradores escritos antes de consultar. Verificado 3 de 3 contra el modelo.
-- 153 pruebas unitarias, incluidas `tests/test_business_rules.py` y las regresiones de cada falla real del modelo.
+- **Conversación en vivo** en Compose y kind (saludo, requerimiento, requerimiento amplio, consulta de datos, agradecimiento y petición fuera de dominio): los 6 turnos correctos en ambos entornos. La HU se divide en 5 historias y los datos llegan verificados en 5 a 21 s.
+- 158 pruebas unitarias, incluidas `tests/test_business_rules.py` y las regresiones de cada falla real del modelo.
 
 ## Resuelto: gates de agentes que comparten fase
 

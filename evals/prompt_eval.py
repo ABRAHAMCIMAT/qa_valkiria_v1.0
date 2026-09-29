@@ -314,7 +314,8 @@ async def main() -> None:
     if args.prompts:
         use_prompts(args.prompts)
     settings = Settings()
-    llm = OpenAICompatibleLLM(settings.llm_base_url, settings.llm_model, settings.secret("llm_api_key"), timeout_seconds=settings.llm_timeout_seconds, auth_header=settings.llm_auth_header)
+    llm = OpenAICompatibleLLM(settings.llm_base_url, settings.llm_model, settings.secret("llm_api_key"), timeout_seconds=settings.llm_timeout_seconds, auth_header=settings.llm_auth_header,
+                              token_budget=prompts.token_budget)
     evaluation = Eval(llm, args.samples, args.synthetic_url)
     results: dict[str, Any] = {"prompt_version": prompts.PROMPT_VERSION, "model": settings.llm_model, "samples": args.samples}
     for name in args.tasks.split(","):

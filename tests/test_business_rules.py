@@ -132,3 +132,71 @@ async def test_missing_invest_suggestions_are_completed():
     by_name = {c.name: c for c in evaluation.criteria}
     assert by_name["Pequeña"].suggestion == "Agregar un criterio para stock igual a 1."
     assert by_name["Valiosa"].suggestion is None and llm.calls.count("suggestion") == 1
+
+
+# --- Regresiones de la conversación en vivo con Llama 3.2 ---------------------------------------------------
+
+BROAD = "Necesito un portal donde los clientes vean sus autos, agenden citas, paguen en línea y chateen con asesores"
+
+
+async def test_broad_requirement_is_split_even_when_the_model_says_crear():
+    # En vivo, con una HU en curso, el modelo eligió "crear" para un requerimiento con 4 funcionalidades.
+    from valkiria.application.use_cases import looks_broad
+    from valkiria.domain.models import UserStory
+    assert looks_broad(BROAD) and not looks_broad("Necesito que los asesores vean el stock por agencia para cerrar ventas más rápido")
+    llm = ScriptedLLM()
+    llm.chat_response = {"intent": "crear", "reply": "Redacté la historia.", "assumptions": [], "story": STORY}
+    service = ValkiriaService(llm, InMemoryAudit(), InMemoryMetrics(), InMemoryStories())
+    result = await service.converse(BROAD, [], UserStory.model_validate(STORY), "po")
+    assert result["intent"] == "dividir" and result["story"] is None and len(result["split"]) == 3 and result["reply"].endswith("?")
+
+
+async def test_a_copied_current_story_is_not_returned_as_the_new_one():
+    # En vivo, el modelo devolvió la HU en curso como si fuera la nueva.
+    from valkiria.domain.models import UserStory
+    llm = ScriptedLLM()
+    current = UserStory.model_validate(STORY)
+    llm.chat_response = {"intent": "crear", "reply": "Redacté la historia.", "assumptions": [], "story": STORY}
+    llm.story = {**STORY, "title": "Agendar cita de servicio"}
+    service = ValkiriaService(llm, InMemoryAudit(), InMemoryMetrics(), InMemoryStories())
+    result = await service.converse("Quiero agendar citas de servicio desde el portal", [], current, "po")
+    assert result["story"]["title"] == "Agendar cita de servicio"
+    assert "Historia actual" not in llm.prompts[-1][1]  # se redactó solo con el requerimiento nuevo
+
+
+async def test_copied_example_capability_and_refusal_drafts_become_the_standard_polite_answer():
+    from test_assistant import assistant_for
+    llm = ScriptedLLM()
+    llm.assistant_script = [{"accion": "no_puedo", "falta": "traducir documentos"}] * 2  # se revisa una vez antes de aceptar la negativa
+    answer = await assistant_for(llm).ask("¿Me recomiendas un restaurante?")
+    assert "traducir" not in answer.answer and answer.answer.startswith("Lo siento, eso no está dentro de lo que puedo hacer.")
+    llm = ScriptedLLM()
+    llm.assistant_script = [{"accion": "responder", "respuesta": "No, no puedo recomendar un restaurante."}]
+    refusal = await assistant_for(llm).ask("¿Me recomiendas un restaurante?")
+    assert refusal.status == "unsupported" and "Lo que sí puedo hacer" in refusal.answer and "pruebas de BD:" not in refusal.answer
+
+
+async def test_each_task_has_an_output_token_budget(monkeypatch):
+    from valkiria.application import prompts
+    sent = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent["body"] = request.content.decode()
+        return httpx.Response(200, json={"choices": [{"message": {"content": "{}"}}]})
+
+    original = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: original(transport=httpx.MockTransport(handler), **kw))
+    llm = OpenAICompatibleLLM("http://ollama.test/v1", "m", token_budget=prompts.token_budget)
+    await llm.generate_json(system=prompts.ASSISTANT_SYSTEM.format(max_steps=4, catalog=""), user="u", schema={})
+    assert '"max_tokens":500' in sent["body"]
+    assert prompts.token_budget(prompts.MATRIX_SYSTEM) == 3500
+
+
+async def test_empty_model_split_still_triggers_the_focused_split():
+    # Caso real en vivo: el modelo eligió "dividir" con la lista vacía y el código lo degradaba a "crear" copiando la HU en curso.
+    from valkiria.domain.models import UserStory
+    llm = ScriptedLLM()
+    llm.chat_response = {"intent": "dividir", "reply": "Es amplio.", "assumptions": [], "story": None, "split": []}
+    service = ValkiriaService(llm, InMemoryAudit(), InMemoryMetrics(), InMemoryStories())
+    result = await service.converse(BROAD, [], UserStory.model_validate(STORY), "po")
+    assert result["intent"] == "dividir" and len(result["split"]) == 3 and "split" in llm.calls

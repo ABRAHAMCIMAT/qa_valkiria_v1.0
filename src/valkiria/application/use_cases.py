@@ -9,6 +9,7 @@ from valkiria.application.prompts import (
     MATRIX_SYSTEM,
     PROMPT_VERSION,
     RISK_SYSTEM,
+    STORY_SPLIT_SYSTEM,
     STORY_SYSTEM,
 )
 from valkiria.domain.models import (
@@ -124,6 +125,12 @@ def _split_item(item) -> dict:
     return {"title": _text(item).strip(), "description": ""}
 
 
+def looks_broad(message: str) -> bool:
+    """Enumeración de 3 o más funcionalidades ("vean sus autos, agenden citas, paguen y chateen"): candidato a división."""
+    clauses = [c for c in re.split(r",|;|\by\b|\be\b", message) if len(c.split()) >= 2]
+    return len(clauses) >= 3 and len(message.split()) >= 10
+
+
 def matrix_user_prompt(story: UserStory) -> str:
     """La historia más la lista exacta de casos que exige HU-004: un modelo pequeño cumple mejor una lista que una regla que debe calcular."""
     slots = [f"TC-{c.id}-{suffix} ({c.id}, {kind})" for c in story.acceptance_criteria for suffix, kind in (("P", "positive"), ("N", "negative"), ("E", "edge"))]
@@ -134,7 +141,8 @@ def matrix_user_prompt(story: UserStory) -> str:
 def _clean_reply(reply: str) -> str:
     """La historia se muestra aparte: si el modelo la pegó en reply (JSON o "Aquí está el resultado:"), se quita."""
     cleaned = re.sub(r"\{.*\}", "", reply, flags=re.DOTALL)
-    cleaned = re.sub(r"(?i)\s*(aqu[ií] est[aá] (el resultado|la historia)[^.:]*[:.]?)\s*$", "", cleaned.strip())
+    # "Aquí está su versión actualizada: Title: … Description: …": se corta desde donde empieza la historia pegada.
+    cleaned = re.split(r"(?i)\s*(?:aqu[ií] (?:est[aá]|tienes)\b[^.?!]*[:.]|\b(?:title|t[ií]tulo|description|descripci[oó]n)\s*:)", cleaned, maxsplit=1)[0]
     return cleaned.strip()
 
 
@@ -215,6 +223,17 @@ class ValkiriaService:
                 intent = "conversar"
             if intent == "ajustar" and not current:
                 intent = "crear"
+            asks_edit = bool(re.search(r"\b(agrega|agregar|añade|quita|quitar|cambia|cambiar|ajusta|modifica|elimina|precisa|corrige)\b", message.lower()))
+            model_split = [item for item in (_split_item(i) for i in _as_list(data.get("split"))) if item["title"]]
+            already_split = intent == "dividir" and len(model_split) >= 2
+            if not already_split and (intent in {"crear", "conversar", "dividir"} or (intent == "ajustar" and not asks_edit)) and looks_broad(message):
+                # HU-003B, regla 2: la enumeración de varias funcionalidades se verifica con una tarea acotada de división.
+                proposed = await self.llm.generate_json(system=STORY_SPLIT_SYSTEM, user=message, schema={"type": "object"})
+                candidates = [_split_item(item) for item in _as_list(proposed.get("split"))][:5]
+                if len([c for c in candidates if c["title"]]) >= 2:
+                    intent, data = "dividir", {**data, "split": candidates, "story": None}
+                    data["reply"] = ("Este requerimiento abarca varias funcionalidades independientes, así que te propongo dividirlo en "
+                                     f"{len(candidates)} historias para que cada una se pueda probar por separado. ¿Cuál quieres que redacte primero?")
             reply = _clean_reply(str(data.get("reply") or ""))
             assumptions = [_text(a) for a in _as_list(data.get("assumptions")) if _text(a).strip()][:3]
             story, changes, split = None, None, []
@@ -226,7 +245,11 @@ class ValkiriaService:
                     intent, split = "crear", []
             if intent in {"crear", "ajustar"}:
                 fields = _normalize_story(data.get("story") if isinstance(data.get("story"), dict) else {})
-                if intent == "crear" and len(fields["acceptance_criteria"]) < 3:
+                copied = intent == "crear" and current is not None and fields.get("title") == current.title
+                if intent == "crear" and (len(fields["acceptance_criteria"]) < 3 or copied):
+                    # Una HU nueva se redacta solo con el requerimiento nuevo (y la memoria del equipo): con la HU en curso
+                    # en el contexto, el modelo tiende a devolverla copiada.
+                    context = ([memory] if memory else []) + [f"Mensaje nuevo del usuario:\n{message}"]
                     # Los modelos locales tienden a resumir en modo conversación; la instrucción dedicada produce criterios completos.
                     fields = _normalize_story(await self.llm.generate_json(system=STORY_SYSTEM, user="\n\n".join(context), schema=UserStory.model_json_schema()))
                 try:

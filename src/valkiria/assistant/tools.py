@@ -160,7 +160,8 @@ class ToolBox:
         wanted = set(tokens(query))
         scored = []
         for tool in self._tools.values():
-            vocabulary = set(tokens(" ".join((tool.title, tool.description, *tool.keywords))))
+            # Título y palabras clave curadas: la descripción tiene verbos genéricos ("Recomienda…") que darían alternativas sin relación.
+            vocabulary = set(tokens(" ".join((tool.title, *tool.keywords))))
             overlap = len(wanted & vocabulary)
             if overlap:
                 scored.append((overlap, tool))
