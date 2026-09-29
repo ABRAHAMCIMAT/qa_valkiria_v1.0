@@ -15,7 +15,7 @@ def run(coro):
 
 def test_registry_contains_all_specialized_agents():
     registry = build_default_registry()
-    assert registry.names() == ["intake", "grounding", "generation", "evaluation", "database", "automation", "approval", "release", "operations"]
+    assert registry.names() == ["intake", "grounding", "generation", "evaluation", "assistant", "database", "automation", "approval", "release", "operations"]
 
 
 def test_router_selects_multiple_agents_for_complex_request():

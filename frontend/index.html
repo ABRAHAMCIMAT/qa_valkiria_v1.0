@@ -93,6 +93,11 @@
   .notice strong { color: var(--text); font-weight: 600; }
   .notice ul { margin: 4px 0 0 16px; }
   .notice.error { border-left-color: var(--red); }
+  .notice.info { border-left-color: var(--green); }
+  .reply { white-space: pre-line; }
+  .reasoning { margin-top: 8px; font-size: 12px; color: var(--muted); }
+  .reasoning summary { cursor: pointer; color: var(--muted-2); }
+  .reasoning ol { margin: 6px 0 0 18px; }
   .follow { margin-top: 12px; color: var(--muted-2); }
 
   .doc { margin-top: 12px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-2); overflow: hidden; }
@@ -220,7 +225,7 @@ const chat = document.getElementById('chat'), thread = document.getElementById('
 const input = document.getElementById('input'), sendBtn = document.getElementById('sendBtn');
 
 const AGENTS = [['intake','Intake','Solicitud'],['grounding','Grounding','Políticas'],['generation','Generación','Historia'],['evaluation','Evaluación','INVEST · Riesgo'],['automation','Automatización','Scripts'],['database','Base de datos','Validación'],['approval','Aprobación','Humana']];
-const state = { history: [], story: null, done: new Set(), busy: false, invest: null, risk: null, cases: null, testCases: [] };
+const state = { sessionId: null, history: [], story: null, done: new Set(), busy: false, invest: null, risk: null, cases: null, testCases: [] };
 
 function icon(n){ return '<svg class="icon-svg"><use href="#i-'+n+'"></use></svg>'; }
 function esc(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
@@ -286,9 +291,12 @@ async function converse(msg){
   const working = addWorking(state.story ? 'Revisando tu mensaje con la historia actual en contexto…' : 'Analizando el requerimiento…');
   renderPipeline(['intake','grounding','generation']);
   try {
-    const d = await api('/v1/chat', { message: msg, history: state.history.slice(-10), story_id: state.story?.id || null });
+    const d = await api('/v1/chat', { message: msg, history: state.history.slice(-10), story_id: state.story?.id || null, session_id: state.sessionId });
     state.done.add('intake'); state.done.add('grounding');
-    let html = '<p>'+esc(d.reply)+'</p>';
+    if(d.session_id) state.sessionId = d.session_id;
+    let html = '<p class="reply">'+esc(d.reply)+'</p>';
+    if(d.assistant) html += assistantTrace(d.assistant);
+    if(d.memory?.recalled?.length) html += '<div class="suggest">Consideré '+d.memory.recalled.length+' recuerdo(s) validados del equipo.</div>';
     if(d.story){
       state.done.add('generation');
       if(d.changes || (state.story && state.story.id !== d.story.id)){ state.invest = null; state.risk = null; state.cases = null; state.testCases = []; }
@@ -301,6 +309,18 @@ async function converse(msg){
     state.history.push({role:'user', content: msg}, {role:'assistant', content: d.reply});
   } catch(e){ showError(working, e.message, () => converse(msg)); }
   finally { setBusy(false); renderPipeline(); renderSession(); scroll(); input.focus(); }
+}
+
+/* Peticiones fuera del flujo: qué herramientas usó el asistente y cómo llegó a la respuesta. */
+function assistantTrace(a){
+  let h = '';
+  if(a.tools_used?.length) h += '<div class="chips" style="margin-top:8px">'+a.tools_used.map(t => '<span class="chip ok">'+esc(t)+'</span>').join('')+'</div>';
+  else if(a.status === 'answered') h += '<div class="chips" style="margin-top:8px"><span class="chip warn">Sin verificar con herramientas</span></div>';
+  if(a.status === 'unsupported') h += '<div class="notice"><strong>Fuera de mis capacidades actuales.</strong> Arriba te indico lo que sí puedo hacer.</div>';
+  const steps = (a.steps || []).filter(s => s.tool || s.reason);
+  if(steps.length) h += '<details class="reasoning"><summary>Cómo lo resolví ('+steps.length+' paso'+(steps.length===1?'':'s')+')</summary><ol>'+
+    steps.map(s => '<li>'+(s.reason ? esc(s.reason)+' ' : '')+(s.tool ? '<code>'+esc(s.tool)+'</code> ' : '')+(s.error ? '<span class="chip bad">'+esc(s.error)+'</span>' : s.observation ? '<span class="chip ok">ok</span>' : '')+'</li>').join('')+'</ol></details>';
+  return h;
 }
 
 function storyDoc(s, changes){

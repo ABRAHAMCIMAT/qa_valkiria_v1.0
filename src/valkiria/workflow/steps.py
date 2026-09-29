@@ -31,6 +31,7 @@ from valkiria.application.use_cases import (
     _story_changes,
 )
 from valkiria.domain.models import InvestEvaluation, TestMatrix, UserStory
+from valkiria.memory.service import with_memory
 from valkiria.workflow.planner import actionable_suggestions, approved_suggestions
 from valkiria.workflow.state import WorkflowState
 from valkiria.workflow.validators import (
@@ -70,14 +71,14 @@ async def _generate(service: ValkiriaService, system: str, user: str, schema: di
     return await service.llm.generate_json(system=system, user=user, schema=schema)
 
 
-async def run_story(state: WorkflowState, service: ValkiriaService) -> StepOutput:
-    story = await service.create_story(str(state.params["requirement"]), state.actor)
+async def run_story(state: WorkflowState, service: ValkiriaService, memory: str = "") -> StepOutput:
+    story = await service.create_story(str(state.params["requirement"]), state.actor, memory=memory)
     return StepOutput(story.model_dump(mode="json"), {}, ["Borrador generado por IA (HU-003B)."], f"HU '{story.title}' creada en borrador.")
 
 
-async def run_invest(state: WorkflowState, service: ValkiriaService) -> StepOutput:
+async def run_invest(state: WorkflowState, service: ValkiriaService, memory: str = "") -> StepOutput:
     story = _story(state)
-    evaluation = await service.evaluate_invest(story, state.actor)
+    evaluation = await service.evaluate_invest(story, state.actor, memory=memory)
     criteria = [c.model_dump() for c in evaluation.criteria]
     findings = validate_invest(criteria)
     warnings: list[str] = []
@@ -102,12 +103,12 @@ REVISION_SYSTEM = (
 )
 
 
-async def run_story_revision(state: WorkflowState, service: ValkiriaService) -> StepOutput:
+async def run_story_revision(state: WorkflowState, service: ValkiriaService, memory: str = "") -> StepOutput:
     story = _story(state)
     suggestions = approved_suggestions(state)
     user = "Historia actual:\n" + story.model_dump_json(include={"title", "description", "business_rules", "acceptance_criteria"}) + "\n\nSugerencias aprobadas:\n" + json.dumps(
         [{"criterio": s["name"], "sugerencia": s["suggestion"]} for s in suggestions], ensure_ascii=False)
-    fields = _normalize_story(await _generate(service, REVISION_SYSTEM, user, UserStory.model_json_schema()))
+    fields = _normalize_story(await _generate(service, REVISION_SYSTEM, with_memory(user, memory), UserStory.model_json_schema()))
     try:
         revised = UserStory.model_validate({**fields, "id": story.id, "version": story.version + 1})
     except ValidationError as exc:
@@ -139,13 +140,13 @@ def _fit_matrix(cases: list[dict[str, Any]], ids: list[str]) -> list[dict[str, A
     return (required + rest)[:30]
 
 
-async def run_matrix(state: WorkflowState, service: ValkiriaService) -> StepOutput:
+async def run_matrix(state: WorkflowState, service: ValkiriaService, memory: str = "") -> StepOutput:
     story = _story(state)
     criteria = [c.model_dump() for c in story.acceptance_criteria]
     if len(criteria) > MAX_CRITERIA_PER_MATRIX:
         raise StepError("matrix_requires_split", f"La HU tiene {len(criteria)} criterios; el máximo por generación es {MAX_CRITERIA_PER_MATRIX}. Divide la HU o genera por lotes (HU-004).", retryable=False)
     ids = [c["id"] for c in criteria]
-    matrix = await service.generate_matrix(story, state.actor)
+    matrix = await service.generate_matrix(story, state.actor, memory=memory)
     cases = [c.model_dump(mode="json") for c in matrix.cases]
     warnings: list[str] = []
     findings = validate_matrix(cases, ids)
@@ -170,8 +171,8 @@ async def run_matrix(state: WorkflowState, service: ValkiriaService) -> StepOutp
                       f"Matriz con {len(cases)} casos para {len(ids)} criterio(s).")
 
 
-async def run_risk(state: WorkflowState, service: ValkiriaService) -> StepOutput:
-    assessment = await service.assess_risk(_story(state), state.actor)
+async def run_risk(state: WorkflowState, service: ValkiriaService, memory: str = "") -> StepOutput:
+    assessment = await service.assess_risk(_story(state), state.actor, memory=memory)
     payload = assessment.model_dump(mode="json")
     warnings = ["Histórico de defectos no considerado (HU-005, regla 3)."]
     if assessment.level.value == "high":
@@ -179,7 +180,7 @@ async def run_risk(state: WorkflowState, service: ValkiriaService) -> StepOutput
     return StepOutput(payload, _versions(state, "story"), warnings, f"Riesgo {assessment.level.value}.")
 
 
-async def run_automation(state: WorkflowState, service: ValkiriaService) -> StepOutput:
+async def run_automation(state: WorkflowState, service: ValkiriaService, memory: str = "") -> StepOutput:
     matrix = state.artifacts["matrix"]
     cases = matrix.payload["cases"]
     params = state.params
@@ -198,7 +199,7 @@ async def run_automation(state: WorkflowState, service: ValkiriaService) -> Step
     return StepOutput({"batches": batches}, _versions(state, "matrix"), warnings, f"{sum(len(b['case_ids']) for b in batches)} scripts en {len(batches)} lote(s), entrega solo por pull request.")
 
 
-async def run_pipeline(state: WorkflowState, service: ValkiriaService) -> StepOutput:
+async def run_pipeline(state: WorkflowState, service: ValkiriaService, memory: str = "") -> StepOutput:
     scripts: list[str] = []
     automation = state.artifacts.get("automation")
     if automation:
@@ -210,7 +211,7 @@ async def run_pipeline(state: WorkflowState, service: ValkiriaService) -> StepOu
     return StepOutput({"yaml": text, "scripts": scripts, "delivery": "pull_request_only"}, _versions(state, "automation"), warnings, f"Pipeline YAML con {len(scripts)} script(s).")
 
 
-async def run_performance_design(state: WorkflowState, service: ValkiriaService) -> StepOutput:
+async def run_performance_design(state: WorkflowState, service: ValkiriaService, memory: str = "") -> StepOutput:
     params = state.params
     tool = str(params.get("performance_tool", "jmeter")).lower()
     if tool not in PERFORMANCE_TOOLS:
@@ -223,7 +224,7 @@ async def run_performance_design(state: WorkflowState, service: ValkiriaService)
     return StepOutput(plan | {"execution_target": "azure-load-testing", "executed": False}, _versions(state, "story"), ["Diseño listo; la ejecución corresponde a HU-008B."], f"Escenario {plan['scenario_type']} con {plan['users']} usuarios y SLA p95 {plan['target_sla_ms']} ms.")
 
 
-async def run_azure_work_item(state: WorkflowState, service: ValkiriaService) -> StepOutput:
+async def run_azure_work_item(state: WorkflowState, service: ValkiriaService, memory: str = "") -> StepOutput:
     story = _story(state)
     criteria = "".join(f"<li><b>{c.id}</b> {c.text}</li>" for c in story.acceptance_criteria)
     rules = "".join(f"<li>{rule}</li>" for rule in story.business_rules)

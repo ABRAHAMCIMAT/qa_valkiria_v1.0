@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from valkiria.agents.base import BaseAgent
 from valkiria.agents.contracts import AgentContext
+from valkiria.assistant.routing import route_message
 from valkiria.llmops.lifecycle import Phase
+from valkiria.memory.service import with_memory
 from valkiria.providers.openai_compatible import LLMProviderError
 
 
@@ -14,9 +16,9 @@ class GenerationAgent(BaseAgent):
         self.llm = llm
 
     async def can_handle(self, context: AgentContext) -> bool:
-        # Toda solicitud suficientemente clara pasa por generación para producir
-        # un artefacto o un plan verificable antes de su evaluación.
-        return True
+        # El trabajo del flujo (HU, matriz, scripts…) pasa por generación; las preguntas y peticiones
+        # fuera del flujo las resuelve el agente assistant con herramientas.
+        return route_message(context.user_request, follow_up=context.follow_up) == "story"
 
     async def execute(self, context: AgentContext):
         if context.artifacts.get("grounding", {}).get("ambiguous"):
@@ -24,7 +26,8 @@ class GenerationAgent(BaseAgent):
         if self.llm is None:
             return self.success(context, "Se generó un borrador determinista para continuar la evaluación.", {"generation": {"mode": "deterministic_draft", "request": context.user_request, "version": "draft-1"}})
         try:
-            generated = await self.llm.generate_json(system="Razona la petición de QA por etapas y devuelve un artefacto JSON conciso, verificable y en español.", user=context.user_request, schema={"type": "object", "required": ["summary", "deliverables", "acceptance_criteria"]})
+            memory = "\n\n".join(part for part in (context.memory.get("long_term", ""), ("SESIÓN ACTUAL:\n" + context.memory["session"]) if context.memory.get("session") else "") if part)
+            generated = await self.llm.generate_json(system="Razona la petición de QA por etapas y devuelve un artefacto JSON conciso, verificable y en español.", user=with_memory(context.user_request, memory), schema={"type": "object", "required": ["summary", "deliverables", "acceptance_criteria"]})
             return self.success(context, "El LLM generó un artefacto estructurado.", {"generation": {"mode": "llm", "version": "draft-1", "artifact": generated}})
         except (LLMProviderError, TimeoutError, ValueError) as exc:
             retryable = isinstance(exc, TimeoutError) or getattr(exc, "code", None) == "llm_timeout"

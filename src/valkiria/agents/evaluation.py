@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from valkiria.agents.base import BaseAgent
 from valkiria.agents.contracts import AgentContext
+from valkiria.assistant.routing import route_message
 from valkiria.llmops.lifecycle import Phase
 
 
@@ -10,9 +11,8 @@ class EvaluationAgent(BaseAgent):
     phase = Phase.EVALUATION
 
     async def can_handle(self, context: AgentContext) -> bool:
-        # La evaluación es obligatoria para toda petición que llegue a la
-        # orquestación: cubre INVEST, cobertura, riesgo y políticas estáticas.
-        return True
+        # Evalúa todo artefacto generado por el flujo: INVEST, cobertura, riesgo y políticas estáticas.
+        return route_message(context.user_request, follow_up=context.follow_up) == "story"
 
     async def execute(self, context: AgentContext):
         generation = context.artifacts.get("generation", {})

@@ -32,7 +32,11 @@ class IntakeAgent(BaseAgent):
         for intent, terms in mapping.items():
             if any(term in text for term in terms):
                 intents.append(intent)
+        inherited = False
+        if not intents and context.memory.get("facts", {}).get("intents"):
+            # Seguimiento de la conversación ("ahora para el Sentra"): se conserva la intención de la sesión.
+            intents, inherited = list(context.memory["facts"]["intents"]), True
         if not intents:
             intents = ["general_qa"]
-        artifact = {"intake": {"intents": intents, "keywords": keywords[:80], "scope": "repository", "language": "es"}}
-        return self.success(context, "Petición clasificada y acotada.", artifact, [{"agent": self.name, "decision": "intent_classification", "intents": intents}])
+        artifact = {"intake": {"intents": intents, "keywords": keywords[:80], "scope": "repository", "language": "es", "intents_from_session": inherited}}
+        return self.success(context, "Petición clasificada y acotada.", artifact, [{"agent": self.name, "decision": "intent_classification", "intents": intents, "from_session": inherited}])

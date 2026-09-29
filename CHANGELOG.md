@@ -2,6 +2,38 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/).
 
+## 2026-09-29 — Memoria corta y larga, y asistente de razonamiento con herramientas
+
+### Añadido
+- `src/valkiria/memory/`: memoria de corto plazo y memoria de largo plazo.
+  - **Corto plazo:** ventana de turnos con resumen determinista, datos de sesión y expiración por inactividad.
+  - **Largo plazo:** aprende solo de decisiones humanas, con BM25 y decaimiento por antigüedad, redacción de secretos, deduplicación, retención, `namespace` y olvido.
+  - **Persistencia:** SQLite o PostgreSQL. Por defecto usa la base de los flujos; en Azure, `valkiria_workflows`.
+- El flujo por historia aprende de aprobaciones, decisiones INVEST, ediciones, rechazos con comentario y fallos definitivos. Además:
+  - Inyecta los recuerdos relevantes en HU, INVEST, matriz y riesgo.
+  - Registra `memory_used` en cada artefacto.
+  - Si la memoria falla, continúa sin ella.
+- Sesiones en `/v1/chat` y `/v1/agent/execute`:
+  - El chat recupera la HU en curso sin que el cliente reenvíe el historial.
+  - El orquestador resuelve seguimientos cortos heredando la intención.
+- `src/valkiria/assistant/`: asistente de razonamiento para peticiones fuera del flujo.
+  - Catálogo cerrado de 11 herramientas y 4 skills conectadas a código real.
+  - Políticas resueltas en código.
+  - Glosario de QA verificado.
+  - Ciclo decidir → ejecutar → observar.
+  - Verificación antes de rendirse o de responder de memoria.
+  - Redacción final verificada contra las conclusiones calculadas por cada herramienta.
+  - Respuesta honesta de "no puedo", con alternativas reales.
+- Agente `assistant` en el orquestador. `/v1/chat`, `/v1/workflows` y `/v1/workflows/{id}/requests` enrutan al asistente lo que no es trabajo del flujo.
+- Endpoints `/v1/assistant/ask`, `/v1/assistant/capabilities` y `/v1/memory/...`. `/health` informa la memoria, los agentes y las herramientas.
+- Interfaz: conserva `session_id`, muestra las herramientas usadas y "Cómo lo resolví".
+- 6 variables `VALKIRIA_MEMORY_*`. `docs/memoria.md` y `docs/asistente.md`.
+- 50 pruebas nuevas (memoria, asistente, enrutamiento y regresiones de fallas reales de Llama 3.2).
+
+### Cambiado
+- Las peticiones sin tareas reconocibles ya no se convierten por defecto en una HU ni se ignoran dentro de un flujo: se responden con herramientas.
+- Grounding ya no bloquea preguntas cortas ("¿Qué puedes hacer?") ni seguimientos de una sesión activa.
+
 ## 2026-09-28 — Flujo de agentes por historia
 
 ### Añadido

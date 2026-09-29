@@ -12,11 +12,11 @@ class AgentRouter:
 
     async def plan(self, context: AgentContext) -> AgentPlan:
         selected = []
-        rationale = ["Intake, Grounding, Generation y Evaluation son obligatorios para toda petición."]
+        rationale = ["Intake y Grounding son obligatorios. Generation y Evaluation atienden el trabajo del flujo; Assistant, las preguntas y peticiones fuera del flujo."]
         for agent in self.registry.values():
             if await agent.can_handle(context):
                 selected.append(agent.name)
-        mandatory = [name for name in ("intake", "grounding", "generation", "evaluation") if name in self.registry.names()]
+        mandatory = [name for name in ("intake", "grounding", "generation", "evaluation", "assistant") if name in self.registry.names()]
         selected = [name for name in mandatory if name in selected] + [name for name in selected if name not in mandatory]
         if selected[:2] != ["intake", "grounding"]:
             raise RuntimeError("El plan no contiene los agentes intake y grounding obligatorios.")

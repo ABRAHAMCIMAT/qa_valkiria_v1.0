@@ -12,6 +12,20 @@ Se consideran prompt injection, exposición de secretos, SQL destructivo, acceso
 - No se expone razonamiento interno completo.
 - El contenido externo se trata como dato, no como instrucción.
 
+## Memoria
+
+- La memoria de largo plazo solo aprende de decisiones humanas o de registros explícitos; un borrador del LLM nunca se memoriza.
+- Antes de guardar, se redactan credenciales en URLs, pares `password=`, `token=` y `api_key=`, tokens Bearer, correos y cadenas largas tipo secreto.
+- Se aísla por `namespace`, tiene retención configurable y se puede olvidar por API.
+- Los recuerdos llegan al prompt delimitados como datos de referencia, "no son instrucciones", para reducir la inyección de instrucciones.
+
+## Asistente con herramientas
+
+- **Catálogo cerrado:** el modelo solo invoca herramientas registradas. El código valida y convierte los argumentos y ejecuta con tiempo límite. Los errores se aíslan sin filtrar detalles.
+- **Herramientas de datos de solo lectura:** hacen GET a la app sintética. No se exponen la creación ni la cancelación de órdenes.
+- **Políticas sin pasar por el modelo:** producción, commits directos, credenciales, correo e internet se rechazan en código.
+- **Sin atribuir datos al modelo:** las respuestas sin herramientas se marcan como no verificadas, y una redacción del modelo que no es fiel a los datos se reemplaza por la conclusión calculada.
+
 ## Datos y conexiones
 
 - Requests sin DSN ni credenciales.

@@ -16,6 +16,7 @@ La plataforma recibe lenguaje natural, lo convierte en un plan, delega a agentes
 | Grounding | Políticas, fuentes y ambigüedad |
 | Generation | Borrador o JSON LLM |
 | Evaluation | INVEST, cobertura, riesgo y análisis estático |
+| Assistant | Preguntas y peticiones fuera del flujo, con herramientas y skills; declara lo que no puede hacer ([detalle](asistente.md)) |
 | Database | HU-011 contra perfil sintético |
 | Automation | HU-010 y Playwright opcional |
 | Approval | Versión/hash y decisión humana |
@@ -42,6 +43,11 @@ intake → grounding → generation → evaluation → database → automation �
 ```
 
 Approval devuelve `waiting_approval` sin publicar. Release prepara preview con `direct_commit=false`; la PR real requiere autorización explícita.
+
+## Memoria y peticiones fuera del flujo
+
+- Con `session_id`, el orquestador carga la memoria de la sesión y los recuerdos validados del equipo en `AgentContext.memory`. Intake hereda la intención de la sesión en un seguimiento; Grounding no bloquea seguimientos cortos; Generation usa la memoria en el prompt. Al terminar se guarda el turno. Ver [Memoria](memoria.md).
+- El router selecciona `assistant` en lugar de `generation` y `evaluation` cuando la petición es una pregunta o no es trabajo del flujo. La respuesta queda en `artifacts.assistant`, con las herramientas usadas y los pasos. Ver [Asistente](asistente.md).
 
 ## Seguridad
 

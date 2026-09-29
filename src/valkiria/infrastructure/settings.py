@@ -38,6 +38,13 @@ class Settings(BaseSettings):
     synthetic_database_url: SecretStr | None = None
     # Persistencia de los flujos por historia (SQLite o PostgreSQL). Vacío: en memoria.
     workflow_database_url: SecretStr | None = None
+    # Memoria corta (sesión) y larga (conocimiento validado). Vacío: usa la base de los flujos; ambas vacías: en memoria.
+    memory_enabled: bool = True
+    memory_database_url: SecretStr | None = None
+    memory_short_term_turns: int = Field(default=12, ge=2, le=100)
+    memory_short_term_ttl_minutes: int = Field(default=120, ge=1, le=10080)
+    memory_long_term_top_k: int = Field(default=4, ge=0, le=20)
+    memory_long_term_retention_days: int = Field(default=365, ge=1, le=3650)
     automation_runner: str = "playwright"
     automation_execute: bool = False
     automation_headless: bool = True
@@ -56,7 +63,7 @@ class Settings(BaseSettings):
             return [origin.strip() for origin in value.split(",") if origin.strip()]
         return value
 
-    @field_validator("llm_api_key", "synthetic_database_url", "workflow_database_url", mode="before")
+    @field_validator("llm_api_key", "synthetic_database_url", "workflow_database_url", "memory_database_url", mode="before")
     @classmethod
     def _empty_as_none(cls, value: object) -> object:
         return None if isinstance(value, str) and not value.strip() else value

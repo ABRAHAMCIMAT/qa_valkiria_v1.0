@@ -8,6 +8,7 @@ from valkiria.domain.models import (
     UserStory,
 )
 from valkiria.llmops.lifecycle import Gate, LLMOpsLifecycle, Phase
+from valkiria.memory.service import with_memory
 
 STORY_SHAPE = (
     '{"title": "título breve", "description": "Como <rol>, quiero <acción>, para <beneficio>.", '
@@ -159,12 +160,12 @@ class ValkiriaService:
         await self.ops.record_gate(ctx, Gate.G4, "skipped", {"reason": reason})
         await self.ops.record_gate(ctx, Gate.G5, "skipped", {"reason": reason})
 
-    async def create_story(self, req: str, actor: str) -> UserStory:
+    async def create_story(self, req: str, actor: str, *, memory: str = "") -> UserStory:
         ctx = self.ops.new_context(actor, self.llm.model_name)
         await self.ops.start(ctx, "create_story", ArtifactType.STORY)
         try:
             await self._ground(ctx)
-            data = await self.llm.generate_json(system=STORY_SYSTEM, user=req, schema=UserStory.model_json_schema())
+            data = await self.llm.generate_json(system=STORY_SYSTEM, user=with_memory(req, memory), schema=UserStory.model_json_schema())
             story = UserStory.model_validate(_normalize_story(data))
             await self.stories.save(story)
             await self.ops.record(ctx, Phase.GENERATION, "create_story", "draft_created", ArtifactType.STORY, str(story.id), story.version)
@@ -176,13 +177,13 @@ class ValkiriaService:
             await self.ops.finish(ctx, "failed")
             raise
 
-    async def converse(self, message: str, history: list[dict], current: UserStory | None, actor: str) -> dict:
+    async def converse(self, message: str, history: list[dict], current: UserStory | None, actor: str, *, memory: str = "") -> dict:
         """Turno conversacional: mantiene el hilo y decide si crear, ajustar la historia actual o solo responder."""
         ctx = self.ops.new_context(actor, self.llm.model_name)
         await self.ops.start(ctx, "converse", ArtifactType.STORY)
         try:
             await self._ground(ctx)
-            context = []
+            context = [memory] if memory else []
             if current:
                 context.append(f"Historia actual (versión {current.version}):\n" + current.model_dump_json(include={"title", "description", "business_rules", "acceptance_criteria"}))
             if history:
@@ -226,12 +227,12 @@ class ValkiriaService:
             await self.ops.finish(ctx, "failed")
             raise
 
-    async def evaluate_invest(self, story: UserStory, actor: str) -> InvestEvaluation:
+    async def evaluate_invest(self, story: UserStory, actor: str, *, memory: str = "") -> InvestEvaluation:
         ctx = self.ops.new_context(actor, self.llm.model_name)
         await self.ops.start(ctx, "evaluate_invest", ArtifactType.INVEST)
         try:
             await self._ground(ctx)
-            data = await self.llm.generate_json(system=INVEST_SYSTEM, user=story.model_dump_json(), schema=InvestEvaluation.model_json_schema())
+            data = await self.llm.generate_json(system=INVEST_SYSTEM, user=with_memory(story.model_dump_json(), memory), schema=InvestEvaluation.model_json_schema())
             data = _normalize_invest(data)
             data.update(story_id=story.id, model=self.llm.model_name, prompt_version=ctx.prompt_version)
             result = InvestEvaluation.model_validate(data)
@@ -243,12 +244,12 @@ class ValkiriaService:
             await self.ops.finish(ctx, "failed")
             raise
 
-    async def generate_matrix(self, story: UserStory, actor: str) -> TestMatrix:
+    async def generate_matrix(self, story: UserStory, actor: str, *, memory: str = "") -> TestMatrix:
         ctx = self.ops.new_context(actor, self.llm.model_name)
         await self.ops.start(ctx, "generate_matrix", ArtifactType.TEST_MATRIX)
         try:
             await self._ground(ctx)
-            data = await self.llm.generate_json(system=MATRIX_SYSTEM, user=story.model_dump_json(), schema=TestMatrix.model_json_schema())
+            data = await self.llm.generate_json(system=MATRIX_SYSTEM, user=with_memory(story.model_dump_json(), memory), schema=TestMatrix.model_json_schema())
             data = _normalize_matrix(data)
             data.update(story_id=story.id)
             result = TestMatrix.model_validate(data)
@@ -260,12 +261,12 @@ class ValkiriaService:
             await self.ops.finish(ctx, "failed")
             raise
 
-    async def assess_risk(self, story: UserStory, actor: str, defect_history: list[dict] | None = None) -> RiskAssessment:
+    async def assess_risk(self, story: UserStory, actor: str, defect_history: list[dict] | None = None, *, memory: str = "") -> RiskAssessment:
         ctx = self.ops.new_context(actor, self.llm.model_name)
         await self.ops.start(ctx, "assess_risk", ArtifactType.RISK)
         try:
             await self._ground(ctx)
-            data = await self.llm.generate_json(system=RISK_SYSTEM, user=story.model_dump_json(), schema=RiskAssessment.model_json_schema())
+            data = await self.llm.generate_json(system=RISK_SYSTEM, user=with_memory(story.model_dump_json(), memory), schema=RiskAssessment.model_json_schema())
             data = _normalize_risk(data)
             data["story_id"] = story.id
             data["defect_history_considered"] = bool(defect_history)

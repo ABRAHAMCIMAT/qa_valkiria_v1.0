@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import OrderedDict
 
 from valkiria.agents.approval import ApprovalAgent
+from valkiria.agents.assistant import AssistantAgent
 from valkiria.agents.automation import AutomationAgent
 from valkiria.agents.contracts import SpecializedAgent
 from valkiria.agents.database import DatabaseAgent
@@ -38,12 +39,13 @@ class AgentRegistry:
         return list(self._agents)
 
 
-def build_default_registry(llm=None, audit=None, metrics=None, database_executor=None, automation_runner=None, synthetic_app_base_url="http://localhost:8090") -> AgentRegistry:
+def build_default_registry(llm=None, audit=None, metrics=None, database_executor=None, automation_runner=None, synthetic_app_base_url="http://localhost:8090", assistant=None) -> AgentRegistry:
     registry = AgentRegistry()
     registry.register(IntakeAgent())
     registry.register(GroundingAgent())
     registry.register(GenerationAgent(llm=llm))
     registry.register(EvaluationAgent())
+    registry.register(AssistantAgent(assistant))
     registry.register(DatabaseAgent(executor=database_executor))
     registry.register(AutomationAgent(runner=automation_runner, base_url=synthetic_app_base_url))
     registry.register(ApprovalAgent())

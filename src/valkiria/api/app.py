@@ -26,6 +26,9 @@ from valkiria.application.automation_execution import (
     suggest_database_tool,
 )
 from valkiria.application.use_cases import ValkiriaService
+from valkiria.assistant import ReasoningAssistant, build_toolbox, route_message
+from valkiria.assistant.capabilities import capability_summary
+from valkiria.assistant.tools import ToolContext
 from valkiria.domain.models import UserStory
 from valkiria.infrastructure.execution_memory import (
     InMemoryBatchStore,
@@ -41,6 +44,7 @@ from valkiria.infrastructure.memory import (
 from valkiria.infrastructure.playwright_runner import PlaywrightRunner
 from valkiria.infrastructure.settings import Settings
 from valkiria.infrastructure.synthetic_database import build_synthetic_executor
+from valkiria.memory.service import build_memory, describe, recall_prompt
 from valkiria.providers.openai_compatible import LLMProviderError, OpenAICompatibleLLM
 from valkiria.workflow.engine import (
     WorkflowConflict,
@@ -48,7 +52,7 @@ from valkiria.workflow.engine import (
     WorkflowNotFound,
     view,
 )
-from valkiria.workflow.graph import CAPABILITIES
+from valkiria.workflow.graph import CAPABILITIES, detect_goals
 from valkiria.workflow.state import ConcurrentModification, build_workflow_store
 
 
@@ -63,8 +67,15 @@ def _error_response(code: str, message: str, trace_id: str, status_code: int, de
 DEFAULT_FRONTEND_DIR = Path(__file__).resolve().parents[3] / "frontend"
 
 
+SESSION_ID = r"^[A-Za-z0-9._:-]{8,64}$"
+NAMESPACE = r"^[a-z0-9][a-z0-9._-]{0,63}$"
+
+
 class AgentExecutionReq(BaseModel):
-    request: str = Field(min_length=10, max_length=20000)
+    # Con session_id, una petición de seguimiento puede ser corta: la sesión aporta el contexto.
+    request: str = Field(min_length=3, max_length=20000)
+    session_id: str | None = Field(default=None, pattern=SESSION_ID)
+    namespace: str = Field(default="default", pattern=NAMESPACE)
 
 
 class DatabaseExecutionReq(BaseModel):
@@ -83,8 +94,25 @@ class ChatTurn(BaseModel):
 
 class ChatReq(BaseModel):
     message: str = Field(min_length=1, max_length=20000)
+    # Opcional: si se omite y hay session_id, el servidor usa el hilo guardado en la memoria de corto plazo.
     history: list[ChatTurn] = Field(default_factory=list, max_length=20)
     story_id: str | None = None
+    session_id: str | None = Field(default=None, pattern=SESSION_ID)
+    namespace: str = Field(default="default", pattern=NAMESPACE)
+
+
+class AssistantReq(BaseModel):
+    question: str = Field(min_length=1, max_length=20000)
+    session_id: str | None = Field(default=None, pattern=SESSION_ID)
+    namespace: str = Field(default="default", pattern=NAMESPACE)
+
+
+class MemoryRecordReq(BaseModel):
+    # Por API solo se registra conocimiento explícito; lo demás se aprende de aprobaciones y ediciones.
+    kind: Literal["domain_fact", "lesson"] = "domain_fact"
+    content: str = Field(min_length=10, max_length=1200)
+    namespace: str = Field(default="default", pattern=NAMESPACE)
+    tags: list[str] = Field(default_factory=list, max_length=10)
 
 
 class FreeReq(BaseModel):
@@ -156,8 +184,22 @@ def create_app(llm=None):
     database_executor = build_synthetic_executor(settings.db_profile, settings.secret("synthetic_database_url")) if settings.mode == "synthetic" else None
     automation_runner = PlaywrightRunner(settings.automation_headless, settings.automation_timeout_seconds) if settings.automation_execute and settings.automation_runner == "playwright" else None
     service = ValkiriaService(llm, audit, metrics, stories)
-    workflows = WorkflowEngine(build_workflow_store(settings.secret("workflow_database_url")), service)
-    orchestrator = MultiAgentOrchestrator(build_default_registry(llm=llm, audit=audit, metrics=metrics, database_executor=database_executor, automation_runner=automation_runner, synthetic_app_base_url=settings.synthetic_app_base_url), audit=audit, metrics=metrics)
+    memory = build_memory(settings.secret("memory_database_url") or settings.secret("workflow_database_url"), enabled=settings.memory_enabled,
+                          max_turns=settings.memory_short_term_turns, ttl_minutes=settings.memory_short_term_ttl_minutes,
+                          top_k=settings.memory_long_term_top_k, retention_days=settings.memory_long_term_retention_days)
+    workflows = WorkflowEngine(build_workflow_store(settings.secret("workflow_database_url")), service, memory=memory)
+    # Peticiones fuera del flujo programado: razonamiento con herramientas y skills reales de Valkiria.
+    assistant = ReasoningAssistant(llm, build_toolbox(service=service, memory=memory, workflows=workflows, synthetic_app_base_url=settings.synthetic_app_base_url))
+    workflows.assistant = assistant
+    orchestrator = MultiAgentOrchestrator(build_default_registry(llm=llm, audit=audit, metrics=metrics, database_executor=database_executor, automation_runner=automation_runner,
+                                                                 synthetic_app_base_url=settings.synthetic_app_base_url, assistant=assistant), audit=audit, metrics=metrics, memory=memory)
+
+    async def ask_assistant(question: str, *, actor: str, namespace: str, session_id: str | None, trace_id: str | None, extra: str = ""):
+        recalled = await memory.recall(question, task="agent", namespace=namespace)
+        session_context = await memory.session_context(session_id)
+        context = "\n\n".join(part for part in (recall_prompt(recalled), f"SESIÓN ACTUAL:\n{session_context}" if session_context else "", extra) if part)
+        answer = await assistant.ask(question, ctx=ToolContext(actor=actor, namespace=namespace, session_id=session_id, trace_id=trace_id), context=context)
+        return answer, recalled
 
     app.add_middleware(CORSMiddleware, allow_origins=settings.allowed_origins, allow_credentials=False, allow_methods=["GET", "POST"], allow_headers=["Content-Type", "X-Actor", "X-Trace-Id"])
 
@@ -215,17 +257,80 @@ def create_app(llm=None):
 
     @app.get("/health")
     async def health():
-        return {"status": "ok", "service": "valkiria", "mode": settings.mode, "environment": settings.environment, "model": settings.llm_model, "agents": ["intake", "grounding", "generation", "evaluation", "database", "automation", "approval", "release", "operations"], "database_profile": settings.db_profile, "release_mode": settings.release_mode, "direct_commit": settings.direct_commit, "automation_execute": settings.automation_execute}
+        return {"status": "ok", "service": "valkiria", "mode": settings.mode, "environment": settings.environment, "model": settings.llm_model, "agents": orchestrator.registry.names(), "tools": [t.name for t in assistant.toolbox.all()], "database_profile": settings.db_profile, "release_mode": settings.release_mode, "direct_commit": settings.direct_commit, "automation_execute": settings.automation_execute,
+                "memory": {"enabled": memory.enabled, "persistent": memory.persistent}}
 
     @app.post("/v1/agent/execute")
     async def execute_agent_request(req: AgentExecutionReq, request: Request, x_actor: str = Header(default="anonymous")):
-        result = await orchestrator.run(req.request, actor=x_actor, trace_id=request.state.trace_id)
+        result = await orchestrator.run(req.request, actor=x_actor, trace_id=request.state.trace_id, session_id=req.session_id, namespace=req.namespace)
         return result.model_dump()
 
     @app.post("/v1/chat")
-    async def chat(req: ChatReq, x_actor: str = Header(default="anonymous")):
-        current = await stories.get(req.story_id) if req.story_id else None
-        return await service.converse(req.message, [t.model_dump() for t in req.history], current, x_actor)
+    async def chat(req: ChatReq, request: Request, x_actor: str = Header(default="anonymous")):
+        session_id = req.session_id or str(uuid4())
+        session = await memory.session(session_id)
+        # Memoria de corto plazo: sin historial del cliente se usa el hilo guardado, incluida la HU en curso.
+        history = [t.model_dump() for t in req.history] or await memory.short_term.history(session_id)
+        story_id = req.story_id or (session.facts.get("story_id") if session else None)
+        current = await stories.get(story_id) if story_id else None
+        if route_message(req.message) == "assistant":
+            # Pregunta o petición fuera del flujo de HU: se razona con herramientas y se responde con honestidad.
+            extra = f"HU en curso: '{current.title}' v{current.version}: {current.description}" if current else ""
+            answer, recalled = await ask_assistant(req.message, actor=x_actor, namespace=req.namespace, session_id=session_id, trace_id=request.state.trace_id, extra=extra)
+            story = answer.outputs.get("story")
+            result = {"intent": "responder" if answer.status == "answered" else "no_puedo", "reply": answer.answer, "assumptions": [], "story": story, "changes": None,
+                      "assistant": answer.model_dump(mode="json", exclude={"outputs"})}
+        else:
+            query = req.message + (f" {current.title} {current.description}" if current else "")
+            recalled = await memory.recall(query, task="chat", namespace=req.namespace)
+            result = await service.converse(req.message, history, current, x_actor, memory=recall_prompt(recalled))
+        new_story_id = (result.get("story") or {}).get("id") or story_id
+        await memory.add_turn(session_id, "user", req.message)
+        await memory.add_turn(session_id, "assistant", result["reply"], facts={"story_id": str(new_story_id) if new_story_id else None}, intent=result["intent"])
+        return result | {"session_id": session_id if memory.enabled else None, "memory": {"recalled": describe(recalled)}}
+
+    @app.post("/v1/assistant/ask")
+    async def assistant_ask(req: AssistantReq, request: Request, x_actor: str = Header(default="anonymous")):
+        answer, recalled = await ask_assistant(req.question, actor=x_actor, namespace=req.namespace, session_id=req.session_id, trace_id=request.state.trace_id)
+        if req.session_id:
+            await memory.add_turn(req.session_id, "user", req.question)
+            await memory.add_turn(req.session_id, "assistant", answer.answer, tools=answer.tools_used)
+        return answer.model_dump(mode="json") | {"memory": {"recalled": describe(recalled)}}
+
+    @app.get("/v1/assistant/capabilities")
+    async def assistant_capabilities():
+        return capability_summary(assistant.toolbox) | {"catalogo": [{"name": t.name, "kind": t.kind, "title": t.title, "description": t.description,
+                                                                       "params": [{"name": p.name, "type": p.type, "required": p.required, "choices": list(p.choices)} for p in t.params]}
+                                                                      for t in assistant.toolbox.all()]}
+
+    @app.get("/v1/memory/sessions/{session_id}")
+    async def memory_session(session_id: str):
+        session = await memory.session(session_id)
+        if not session:
+            raise HTTPException(404, "memory_session_not_found")
+        return session.model_dump(mode="json")
+
+    @app.delete("/v1/memory/sessions/{session_id}")
+    async def forget_session(session_id: str):
+        if not await memory.short_term.clear(session_id):
+            raise HTTPException(404, "memory_session_not_found")
+        return {"deleted": session_id}
+
+    @app.get("/v1/memory/long-term")
+    async def long_term_memory(q: str | None = None, namespace: str = "default", kind: str | None = None, limit: int = 50):
+        records = await memory.long_term.search(q, namespace=namespace, kinds=[kind] if kind else None, limit=max(1, min(limit, 200)))
+        return {"namespace": namespace, "records": [r.model_dump(mode="json") for r in records]}
+
+    @app.post("/v1/memory/long-term", status_code=201)
+    async def add_long_term_memory(req: MemoryRecordReq, x_actor: str = Header(default="anonymous")):
+        record, created = await memory.long_term.remember(kind=req.kind, content=req.content, source="api:manual", actor=x_actor, namespace=req.namespace, tags=req.tags)
+        return {"created": created, "record": record.model_dump(mode="json")}
+
+    @app.delete("/v1/memory/long-term/{record_id}")
+    async def forget_long_term_memory(record_id: str):
+        if not await memory.long_term.forget(record_id):
+            raise HTTPException(404, "memory_record_not_found")
+        return {"deleted": record_id}
 
     @app.post("/v1/stories", response_model=UserStory)
     async def create(req: FreeReq, x_actor: str = Header(default="anonymous")):
@@ -361,6 +466,10 @@ def create_app(llm=None):
         _check_goals(req.goals)
         if not req.request and not req.goals:
             raise HTTPException(422, "request_or_goals_required")
+        if req.request and not req.goals and not detect_goals(req.request) and route_message(req.request) == "assistant":
+            # No es trabajo del flujo: se responde con herramientas en lugar de forzar una HU.
+            answer, _ = await ask_assistant(req.request, actor=x_actor, namespace=str(req.params.get("namespace") or "default"), session_id=None, trace_id=request.state.trace_id)
+            return {"id": None, "status": answer.status, "answer": answer.model_dump(mode="json")}
         state, current = await workflows.start(request=req.request, goals=req.goals, params=req.params, actor=x_actor, trace_id=request.state.trace_id)
         return view(state, current)
 

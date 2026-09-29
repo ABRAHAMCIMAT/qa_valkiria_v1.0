@@ -15,7 +15,7 @@ Ejecutada en macOS con Python 3.12.2 y Docker 29.8.1, con el código ya integrad
 | Docker daemon | `docker info` | Activo (Docker Desktop 29.8.1) |
 | Ruff | `ruff check src tests` | Sin errores |
 | Bandit | `bandit -q -c pyproject.toml -r src` | Sin hallazgos |
-| Unitarias | `pytest -q --ignore=tests/e2e` | 85 aprobadas (aisladas del `.env` local mediante `tests/conftest.py`) |
+| Unitarias | `pytest -q --ignore=tests/e2e` | 135 aprobadas (aisladas del `.env` local mediante `tests/conftest.py`) |
 | E2E sintética | `RUN_SYNTHETIC_E2E=1 pytest -v tests/e2e` | 5 aprobadas contra PostgreSQL 16 (flujo de la app sintética y mutaciones con límite); repetibles |
 | Paquete | `python -m build` | `valkiria-0.5.0-py3-none-any.whl` y `valkiria-0.5.0.tar.gz`; el wheel se instala y arranca en un entorno limpio |
 | Imagen Docker | `docker build -f deploy/docker/Dockerfile .` | 303 MB, usuario `uid=10001`, healthcheck activo |
@@ -54,6 +54,16 @@ Ejecutada en macOS con Python 3.12.2 y Docker 29.8.1, con el código ya integrad
 | Persistencia en PostgreSQL real | Guarda, recupera desde otra instancia y detecta escrituras concurrentes |
 | Flujo completo con Llama 3.2 Instruct local | Requerimiento → HU, INVEST, matriz (corregida y completada) y 18 scripts en 2 lotes; el riesgo esperó la aprobación de la HU; estado final `completed` |
 
+## Memoria y asistente de razonamiento
+
+| Verificación | Resultado |
+|---|---|
+| Pruebas de memoria (`tests/test_memory.py`) | 15 aprobadas. Cubren ventana y resumen, expiración, redacción, deduplicación, retención, `namespace`, persistencia en SQLite, aprendizaje desde aprobaciones y ediciones, uso en la siguiente HU, tolerancia a fallos y seguimiento de sesión en el orquestador |
+| Pruebas del asistente (`tests/test_assistant.py`) | 35 aprobadas. Cubren enrutamiento, políticas, herramientas reales, argumentos inválidos, erratas y valores de plantilla, verificación de fidelidad, repetición, caída del modelo, honestidad y API |
+| Memoria en PostgreSQL real | Persiste tras reiniciar, redacta, deduplica y recupera |
+| Integración en vivo con Llama 3.2 | Chat: pregunta con herramienta, creación de HU y ajuste usando solo la sesión. Flujo: aprendió la HU aprobada y las preferencias del PO, y el siguiente flujo las usó. Una pregunta dentro del flujo se respondió con `estado_flujo`. Orquestador: el seguimiento heredó la intención y la pregunta se resolvió con el agente `assistant` |
+| Batería de 13 peticiones fuera del flujo, 2 corridas | 26 de 26 correctas: 22 con la herramienta o skill adecuada y 4 rechazos honestos; ver [Asistente](asistente.md#validación-con-llama-32-instruct) |
+
 ## Resuelto: gates de agentes que comparten fase
 
 Los quality gates se guardaban por fase, y `database` y `automation` comparten la fase `evaluation`, así que el último en ejecutarse sobrescribía el gate del agente de evaluación. Ahora hay un gate por agente, con la fase como campo. Cambio de contrato: la clave del gate de operaciones pasa de `operate` a `operations`. Detalle en [Quality gates](quality-gates.md#en-la-respuesta-del-orquestador).
@@ -72,4 +82,8 @@ Pendiente relacionado: los `INSERT ... VALUES` siguen requiriendo la palabra `LI
 4. **Capacidad del LLM**: Llama 3.2 3B en CPU responde en segundos por petición y Ollama atiende las peticiones de forma secuencial. Con más usuarios hará falta un nodo con GPU o más réplicas. Sin modelo disponible, los endpoints que dependen del LLM fallan de forma controlada.
 5. **Playwright en la imagen**: la imagen no incluye navegadores; `VALKIRIA_AUTOMATION_EXECUTE=true` requiere una imagen con Chromium.
 6. **Formato**: `ruff format --check` reformatearía unos 40 archivos, sobre todo líneas largas. No se aplicó para no mezclar un cambio masivo de estilo con correcciones funcionales, y no se exige en el CI.
-7. **Kubernetes**: el manifiesto base se desplegó y verificó en kind (`deploy/kind/`); el overlay de AKS está validado pero no desplegado. Faltan TLS, NetworkPolicy, HPA y PodDisruptionBudget.
+7. **Memoria y asistente**:
+   - Sin `VALKIRIA_WORKFLOW_DATABASE_URL` ni `VALKIRIA_MEMORY_DATABASE_URL`, la memoria vive en el proceso y no se comparte entre réplicas. En Azure usa `valkiria_workflows`.
+   - La búsqueda es léxica; para grandes volúmenes o sinónimos conviene búsqueda vectorial (Azure AI Search o pgvector) detrás de `LongTermStore`.
+   - Las herramientas de datos consultan solo la app sintética.
+8. **Kubernetes**: el manifiesto base se desplegó y verificó en kind (`deploy/kind/`); el overlay de AKS está validado pero no desplegado. Faltan TLS, NetworkPolicy, HPA y PodDisruptionBudget.

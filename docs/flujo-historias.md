@@ -115,6 +115,12 @@ Verificado con Llama 3.2 Instruct local (CPU):
 - Aportar el repositorio generó 18 scripts en 2 lotes.
 - Aprobar la HU desbloqueó el riesgo en unos 6 s.
 
+## Memoria y preguntas dentro del flujo
+
+- Antes de generar la HU, INVEST, la matriz o el riesgo se recuperan recuerdos validados del equipo, y cada artefacto registra `memory_used`.
+- Aprobar la HU, decidir sobre las sugerencias INVEST, editar, rechazar con comentario o fallar de forma definitiva genera memoria de largo plazo para las siguientes historias. El `namespace` se indica en `params.namespace`. Ver [Memoria](memoria.md).
+- Una petición sin tareas reconocibles, como "¿En qué va este flujo?", se responde con el asistente usando el contexto del flujo y queda en `answers`. `POST /v1/workflows` con una pregunta devuelve la respuesta sin crear un flujo (`id: null`). Ver [Asistente](asistente.md).
+
 ## Límites actuales
 
 - `matrix_sync` (HU-004B) y `performance_run` (HU-008B) aparecen como no disponibles.

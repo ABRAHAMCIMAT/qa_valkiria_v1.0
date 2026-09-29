@@ -14,6 +14,8 @@ Incluye un perfil E2E seguro con datos Nissan ficticios, PostgreSQL efímero, ap
 - [Despliegue: configuración, Docker, Compose, CI y Kubernetes](docs/despliegue.md)
 - [Orquestación multiagente](docs/multiagente-orquestacion.md)
 - [Flujo de agentes por historia (dependencias, aprobaciones y reanudación)](docs/flujo-historias.md)
+- [Memoria de corto y largo plazo](docs/memoria.md)
+- [Asistente de razonamiento con herramientas (peticiones fuera del flujo)](docs/asistente.md)
 - [Ciclo de vida LLMOps](docs/llmops-lifecycle.md)
 - [Quality gates](docs/quality-gates.md)
 - [E2E sintética Nissan](docs/e2e-synthetic.md)
@@ -37,12 +39,17 @@ Frontend conversacional
         ↓
 API FastAPI
         ↓
-Intake → Grounding → Generation → Evaluation
+Memoria corta (sesión) + memoria larga (conocimiento validado)
+        ↓
+Intake → Grounding ─┬─ trabajo del flujo → Generation → Evaluation
+                    └─ pregunta o petición fuera del flujo → Assistant (herramientas y skills)
         ↓                         ↘
  Database                     Automation
         ↓                         ↓
  Approval → Release → Operations → Auditoría y evidencia
 ```
+
+Las peticiones que no siguen el flujo programado se razonan con herramientas y skills reales. Si Valkiria no tiene la capacidad, lo dice y detalla lo que sí puede hacer; ver [Asistente](docs/asistente.md). Las HU aprobadas, las decisiones del PO y las correcciones humanas se recuerdan para las siguientes historias; ver [Memoria](docs/memoria.md).
 
 El punto de entrada multiagente es:
 
@@ -64,8 +71,13 @@ La respuesta conserva `request_id`, `trace_id`, plan de agentes, artefactos, dec
 |---|---|---|
 | GET | `/health` | Estado, modo, agentes y políticas activas |
 | GET | `/` | Frontend conversacional (mismo origen que la API) |
-| POST | `/v1/agent/execute` | Orquestación multiagente |
-| POST | `/v1/chat` | Conversación para construir una historia |
+| POST | `/v1/agent/execute` | Orquestación multiagente (acepta `session_id` para seguimientos) |
+| POST | `/v1/chat` | Conversación: construye la HU o responde preguntas con herramientas; mantiene la sesión |
+| POST | `/v1/assistant/ask` | Pregunta o petición fuera del flujo, resuelta con herramientas y skills |
+| GET | `/v1/assistant/capabilities` | Catálogo de herramientas y skills, límites y capacidades no disponibles |
+| GET, DELETE | `/v1/memory/sessions/{id}` | Consultar o borrar la memoria de una sesión |
+| GET, POST | `/v1/memory/long-term` | Buscar recuerdos o registrar un hecho del dominio |
+| DELETE | `/v1/memory/long-term/{id}` | Olvidar un recuerdo |
 | POST | `/v1/stories` | Crear historia a partir de un requerimiento |
 | POST | `/v1/stories/{id}/invest` | Evaluación INVEST |
 | POST | `/v1/stories/{id}/test-matrix` | Matriz de casos |
@@ -95,6 +107,7 @@ La respuesta conserva `request_id`, `trace_id`, plan de agentes, artefactos, dec
 - `GroundingAgent`: aplica políticas y detecta ambigüedades.
 - `GenerationAgent`: genera borradores o JSON validable mediante el LLM.
 - `EvaluationAgent`: revisa INVEST, cobertura, riesgo y análisis estático.
+- `AssistantAgent`: resuelve preguntas y peticiones fuera del flujo razonando con herramientas y skills; declara con honestidad lo que no puede hacer.
 - `DatabaseAgent`: ejecuta consultas contra un perfil sintético autorizado.
 - `AutomationAgent`: prepara o ejecuta casos Playwright.
 - `ApprovalAgent`: solicita aprobación humana de la versión exacta.
@@ -137,6 +150,7 @@ VALKIRIA_DIRECT_COMMIT=false
 VALKIRIA_PR_REQUIRED=true
 VALKIRIA_LLM_BASE_URL=http://localhost:11434/v1
 VALKIRIA_LLM_MODEL=llama3.2:3b-instruct-q4_K_M
+VALKIRIA_MEMORY_ENABLED=true
 ```
 
 Playwright real solo se habilita explícitamente con `VALKIRIA_AUTOMATION_EXECUTE=true`. `VALKIRIA_ENVIRONMENT=production` no arranca sin `VALKIRIA_ALLOW_PRODUCTION=true`. Detalle completo en [Despliegue](docs/despliegue.md#configuración).

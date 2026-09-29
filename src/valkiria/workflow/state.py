@@ -57,6 +57,8 @@ class ArtifactRecord(BaseModel):
     produced_by: str
     warnings: list[str] = Field(default_factory=list)
     approval: Approval | None = None
+    # Recuerdos de largo plazo que se consideraron al generarlo (explicabilidad).
+    memory_used: list[dict[str, Any]] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utcnow)
 
     @property
@@ -91,15 +93,18 @@ class WorkflowState(BaseModel):
     failures: dict[str, StepFailure] = Field(default_factory=dict)
     history: list[ArtifactRecord] = Field(default_factory=list)
     reasoning: list[ReasoningEntry] = Field(default_factory=list)
+    # Respuestas del asistente a peticiones fuera del flujo hechas dentro de este flujo (las más recientes).
+    answers: list[dict[str, Any]] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
-    def put_artifact(self, key: str, payload: dict[str, Any], *, produced_by: str, based_on: dict[str, int], warnings: list[str] | None = None) -> ArtifactRecord:
+    def put_artifact(self, key: str, payload: dict[str, Any], *, produced_by: str, based_on: dict[str, int], warnings: list[str] | None = None,
+                     memory_used: list[dict[str, Any]] | None = None) -> ArtifactRecord:
         previous = self.artifacts.get(key)
         if previous:
             self.history.append(previous)
         record = ArtifactRecord(key=key, version=(previous.version + 1) if previous else 1, payload=payload, content_hash=content_hash(payload),
-                                based_on=based_on, produced_by=produced_by, warnings=warnings or [])
+                                based_on=based_on, produced_by=produced_by, warnings=warnings or [], memory_used=memory_used or [])
         self.artifacts[key] = record
         self.failures.pop(produced_by, None)
         return record
