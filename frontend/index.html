@@ -483,7 +483,12 @@ function renderExecution(a){
   return head('Ejecución de scripts · '+esc(d.framework||'')+' ('+esc(d.platform||'')+') · app sintética', 'flask',
     ['<span class="chip ok">'+sm.passed+' aprobados</span>', '<span class="chip '+(sm.failed?'bad':'ok')+'">'+sm.failed+' fallidos</span>'])+
     '<div class="tbl-wrap"><table class="grid"><thead><tr><th>Caso</th><th>Tipo</th><th>Petición</th><th>Esperado</th><th>Obtenido</th><th>Resultado</th><th>ms</th></tr></thead><tbody>'+
-    (d.results||[]).map(r => '<tr><td class="mono">'+esc(r.case_id)+'</td><td>'+esc(({api:'API', database:'Datos', web:'Web'})[r.kind]||r.kind||'')+'</td><td class="mono">'+esc(r.request||'')+'</td><td>'+esc((r.expected_status||[]).join(' / '))+'</td><td>'+esc(r.status ?? '—')+
+    (d.results||[]).map(r => '<tr><td class="mono">'+esc(r.case_id)+'</td><td>'+esc(({api:'API', database:'Datos', web:'Web'})[r.kind]||r.kind||'')+'</td><td class="mono">'+esc(r.request||'')+'</td><td>'+
+      (r.kind==='web' ? esc((r.expected?.texts||[]).join(' · ') || '—')+(r.expected?.error_alert ? ' <span class="chip">aviso de error</span>' : '')
+                      : esc((r.expected_status||[]).join(' / ')))+'</td><td>'+
+      (r.kind==='web' ? esc(r.steps_executed+'/'+r.steps_total+' pasos')+(r.failed_step ? '<div class="suggest">Falló en «'+esc(r.failed_step)+'»: '+esc(r.detail||'')+'</div>' : '')+
+        (r.screenshot_jpeg ? '<details><summary>Ver captura</summary><img alt="Captura de '+esc(r.case_id)+'" style="max-width:100%;margin-top:6px;border:1px solid var(--border-soft)" src="data:image/jpeg;base64,'+r.screenshot_jpeg+'"></details>' : '')
+                      : esc(r.status ?? '—'))+
       '</td><td><span class="chip '+((r.result||r.status)==='pass'?'ok':'bad')+'">'+((r.result||r.status)==='pass'?'Aprobado':'Fallido')+'</span></td><td>'+esc(r.duration_ms)+'</td></tr>').join('')+'</tbody></table></div>'+
     (d.report_id ? '<div class="doc-body"><a class="btn" href="'+API+'/v1/reports/'+encodeURIComponent(d.report_id)+'/download">Descargar evidencia (PDF)</a></div>' : '')+'</div>';
 }

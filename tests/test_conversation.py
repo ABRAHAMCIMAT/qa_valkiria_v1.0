@@ -15,9 +15,9 @@ def synthetic_app_transport():
 
 
 class Chat:
-    def __init__(self, llm=None):
+    def __init__(self, llm=None, web_runner=None):
         self.llm = llm or ScriptedLLM()
-        self.api = TestClient(create_app(llm=self.llm, synthetic_transport=synthetic_app_transport()))
+        self.api = TestClient(create_app(llm=self.llm, synthetic_transport=synthetic_app_transport(), web_runner=web_runner))
         self.session = None
 
     def say(self, message=None, **action):
@@ -312,11 +312,48 @@ def test_web_scripts_explain_why_they_cannot_run_here_and_offer_an_api_stack():
     chat.say("Genera los scripts en Playwright para web en el repositorio nissan-qa/web-tests")
     chat.say(type="approve", artifact="automation")
     web = chat.say("Ejecuta los scripts")
-    assert web["intent"] == "aclarar" and "sin interfaz web" in web["reply"]
+    assert web["intent"] == "aclarar" and "navegador habilitado" in web["reply"]
     regenerate = web["actions"][0]
     assert regenerate["goal"] == "automation" and regenerate["preset"] == {"platform": "api"}
     api = chat.say(type="input", goal="automation", preset=regenerate["preset"], params={"framework": "postman-newman"})
     assert api["artifact"]["data"]["platform"] == "api" and api["artifact"]["version"] == 2
+
+
+class RecordingWebRunner:
+    """Runner web de prueba: registra lo que recibe y falla el caso cuyo paso no existe en la pantalla."""
+
+    def __init__(self, available=True):
+        self.available, self.cases = available, []
+
+    async def run(self, *, base_url, cases):
+        if not self.available:
+            raise RuntimeError("playwright_not_installed_run_pip_install_e_e2e")
+        self.cases = cases
+        return [{"case_id": c["id"], "result": "pass", "status": "pass", "request": "GET /ui", "steps_executed": len(c.get("steps", [])),
+                 "steps_total": len(c.get("steps", [])), "expected": {"texts": [], "error_alert": False}} for c in cases]
+
+
+def test_approved_web_scripts_run_in_the_browser_against_the_synthetic_screens():
+    runner = RecordingWebRunner()
+    chat = Chat(web_runner=runner)
+    chat.say("Necesito que los asesores consulten vehículos disponibles por concesionario")
+    chat.say(type="run", goal="matrix")
+    chat.say("Genera los scripts en Playwright para web en el repositorio nissan-qa/web-tests")
+    chat.say(type="approve", artifact="automation")
+    run = chat.say("Ejecuta los scripts")
+    summary = run["artifact"]["data"]["summary"]
+    assert run["artifact"]["kind"] == "execution" and summary["web"] == len(runner.cases) > 0 and summary["failed"] == 0
+    assert all(r["kind"] == "web" for r in run["artifact"]["data"]["results"]) and "caso(s) web" in run["reply"]
+
+
+def test_web_runner_without_browser_explains_and_offers_an_api_stack():
+    chat = Chat(web_runner=RecordingWebRunner(available=False))
+    chat.say("Necesito que los asesores consulten vehículos disponibles por concesionario")
+    chat.say(type="run", goal="matrix")
+    chat.say("Genera los scripts en Playwright para web en el repositorio nissan-qa/web-tests")
+    chat.say(type="approve", artifact="automation")
+    web = chat.say("Ejecuta los scripts")
+    assert web["intent"] == "aclarar" and web["actions"][0]["preset"] == {"platform": "api"}
 
 
 def test_story_with_too_many_criteria_offers_a_way_forward():

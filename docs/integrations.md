@@ -29,7 +29,7 @@ La política exige `LIMIT` en cada `UPDATE` y `DELETE`. Como PostgreSQL no admit
 
 ## Playwright
 
-`PlaywrightRunner` es opcional. Requiere el extra E2E, Chromium y `VALKIRIA_AUTOMATION_EXECUTE=true`. La imagen Docker no incluye Chromium. Captura screenshots, video, consola, requests, responses y duración.
+`PlaywrightRunner` ejecuta en Chromium los pasos de cada caso web contra las pantallas de la app sintética, con la traducción de `application/web_steps.py` que también usa el código generado. Requiere el extra E2E, Chromium y `VALKIRIA_AUTOMATION_EXECUTE=true`; la imagen `-browser` (`--build-arg WITH_BROWSER=true`) los incluye y es la que usan Compose y kind. Por caso devuelve el resultado, los pasos ejecutados, el paso que falla con su motivo, la captura (JPEG en `/tmp`, y dentro del resultado cuando falla), la consola y la duración.
 
 ## Aplicación Nissan sintética
 

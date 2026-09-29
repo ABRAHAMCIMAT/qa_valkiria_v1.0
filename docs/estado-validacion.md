@@ -123,7 +123,7 @@ Pendiente relacionado: los `INSERT ... VALUES` siguen requiriendo la palabra `LI
 2. **Persistencia**: auditoría, métricas, historias, lotes y reportes viven en memoria y se pierden al reiniciar. En Kubernetes, con 2 réplicas, cada pod tiene su propio estado. Falta un almacenamiento durable.
 3. **Red privada**: en Azure, PostgreSQL acepta conexiones de servicios de Azure por firewall y el Ingress es HTTP público. Para producción faltan integración con VNet o Private Endpoint, dominio y TLS (certificado en Key Vault). Los secretos ya vienen de Key Vault con Workload Identity.
 4. **Capacidad del LLM**: Llama 3.2 3B en CPU responde en segundos por petición y Ollama atiende las peticiones de forma secuencial. Con más usuarios hará falta un nodo con GPU o más réplicas. Sin modelo disponible, los endpoints que dependen del LLM fallan de forma controlada.
-5. **Playwright en la imagen**: la imagen no incluye navegadores; `VALKIRIA_AUTOMATION_EXECUTE=true` requiere una imagen con Chromium.
+5. **Playwright en AKS**: Compose y kind usan la imagen `-browser` con Chromium; en AKS sigue deshabilitado hasta decidir el tamaño de nodo (la imagen pesa unos 2 GB y Chromium necesita más memoria).
 6. **Formato**: `ruff format --check` reformatearía unos 40 archivos, sobre todo líneas largas. No se aplicó para no mezclar un cambio masivo de estilo con correcciones funcionales, y no se exige en el CI.
 7. **Memoria y asistente**:
    - Sin `VALKIRIA_WORKFLOW_DATABASE_URL` ni `VALKIRIA_MEMORY_DATABASE_URL`, la memoria vive en el proceso y no se comparte entre réplicas. En Azure usa `valkiria_workflows`.

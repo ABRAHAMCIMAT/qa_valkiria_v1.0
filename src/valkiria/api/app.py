@@ -48,6 +48,7 @@ from valkiria.infrastructure.settings import Settings
 from valkiria.infrastructure.synthetic_database import build_synthetic_executor
 from valkiria.memory.service import build_memory, describe, recall_prompt
 from valkiria.providers.openai_compatible import LLMProviderError, OpenAICompatibleLLM
+from valkiria.synthetic_app.web import UI_GUIDE
 from valkiria.workflow.engine import (
     WorkflowConflict,
     WorkflowEngine,
@@ -176,7 +177,7 @@ def _check_goals(goals: list[str] | None) -> None:
         raise HTTPException(422, "unknown_goals:" + ",".join(unknown))
 
 
-def create_app(llm=None, synthetic_transport=None):
+def create_app(llm=None, synthetic_transport=None, web_runner=None):
     configure_logging()
     logger = get_logger("valkiria.api")
     app = FastAPI(title="Valkiria API", version="0.5.0", description="API auditable para la plataforma multiagente de QA")
@@ -190,9 +191,11 @@ def create_app(llm=None, synthetic_transport=None):
     llm = llm or OpenAICompatibleLLM(settings.llm_base_url, settings.llm_model, settings.secret("llm_api_key"), timeout_seconds=settings.llm_timeout_seconds,
                                      auth_header=settings.llm_auth_header, token_budget=token_budget)
     database_executor = build_synthetic_executor(settings.db_profile, settings.secret("synthetic_database_url")) if settings.mode == "synthetic" else None
-    automation_runner = PlaywrightRunner(settings.automation_headless, settings.automation_timeout_seconds) if settings.automation_execute and settings.automation_runner == "playwright" else None
+    automation_runner = web_runner or (PlaywrightRunner(settings.automation_headless, settings.automation_timeout_seconds)
+                                       if settings.automation_execute and settings.automation_runner == "playwright" else None)
     service = ValkiriaService(llm, audit, metrics, stories, max_parallel=settings.llm_max_parallel, synthetic_app_base_url=settings.synthetic_app_base_url,
-                              web_runner=automation_runner, synthetic_transport=synthetic_transport, database_executor=database_executor)
+                              web_runner=automation_runner, synthetic_transport=synthetic_transport, database_executor=database_executor,
+                              ui_guide=UI_GUIDE if settings.mode == "synthetic" else "")
     memory = build_memory(settings.secret("memory_database_url") or settings.secret("workflow_database_url"), enabled=settings.memory_enabled,
                           max_turns=settings.memory_short_term_turns, ttl_minutes=settings.memory_short_term_ttl_minutes,
                           top_k=settings.memory_long_term_top_k, retention_days=settings.memory_long_term_retention_days)

@@ -63,7 +63,9 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-      - run: pip install -e '.[dev,synthetic]'
+      - run: pip install -e '.[dev,synthetic,e2e]'
+      # Chromium para la E2E del runner web (HU-010) contra las pantallas de la app sintética.
+      - run: python -m playwright install --with-deps chromium
       - name: Aplicar migraciones y datos sintéticos
         env:
           PGPASSWORD: valkiria_synthetic_only

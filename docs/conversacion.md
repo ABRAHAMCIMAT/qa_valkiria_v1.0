@@ -61,12 +61,21 @@ Cada script lleva el id de su caso y el criterio. Antes del PR se ejecutan lint,
 
 ## Cómo probar HU-009 y HU-010 en el flujo completo
 
-La app sintética de Nissan es una API. Para ejecutar los scripts en este entorno:
-1. Pide los scripts con un stack de API, por ejemplo: "Genera los scripts en RestAssured para la API en el repositorio nissan-qa/api-tests".
+La app sintética de Nissan tiene API y pantallas web mínimas: `/ui` (consulta de inventario), `/ui/orders` (registrar orden de venta) y `/ui/appointments` (citas de servicio). Para ejecutar los scripts en este entorno:
+1. Pide los scripts con el stack que quieras, por ejemplo: "Genera los scripts en Playwright para web en el repositorio nissan-qa/web-tests" o "… en RestAssured para la API …".
 2. Revisa el código en la tarjeta y apruébalo.
 3. Di "Ejecuta los scripts" o usa el botón.
 
-Valkiria ejecuta contra la app sintética exactamente las llamadas que contienen los scripts. Muestra por caso el resultado (aprobado o fallido), el código esperado frente al obtenido y el tiempo, y deja la evidencia en PDF descargable. Los fallos se reportan tal cual, sin simular resultados. Los scripts web no tienen interfaz contra la cual ejecutarse aquí: Valkiria lo explica y ofrece regenerarlos con un stack de API, o ejecutarlos en el pipeline contra la UI real.
+- **API:** Valkiria ejecuta contra la app sintética exactamente las llamadas que contienen los scripts y muestra el código esperado frente al obtenido.
+- **Web:** Chromium ejecuta los pasos de cada caso contra las pantallas sintéticas con la misma traducción que el código entregado (ver abajo). Muestra los textos esperados, cuántos pasos se ejecutaron, el paso que falló con su motivo y la captura de pantalla de la falla.
+
+En ambos casos queda la evidencia en PDF descargable y los fallos se reportan tal cual, sin simular resultados. Si el entorno no tiene el navegador habilitado, Valkiria lo explica y ofrece regenerar los scripts con un stack de API.
+
+### Pasos web: una sola traducción para el código y el runner
+
+`application/web_steps.py` traduce cada paso de la matriz a una acción concreta (abrir pantalla, seleccionar, capturar, marcar, hacer clic, verificar) y cada resultado esperado a textos visibles y a si se espera un aviso de error. La usan el generador de Playwright y Selenium y el runner de Chromium, así que lo que se ejecuta aquí es lo que hace el script del PR (se verificó ejecutando el código generado con `npx playwright test` y con Selenium: mismos casos aprobados y el mismo paso fallido).
+
+Los pasos que escribe el modelo suelen ser vagos ("Buscar vehículo disponible") o mezclar pantallas. Por eso cada paso se **aterriza en el catálogo de pantallas** (`SCREENS`): el botón o el campo que existe, navegando de pantalla si hace falta. Antes de enviar un formulario se capturan los datos del caso para sus campos. Un paso que no corresponde a nada del catálogo se intenta tal cual y falla señalándolo, nunca se omite en silencio. La matriz recibe el catálogo de pantallas y los datos sintéticos que existen, para que sus casos sean ejecutables.
 
 ## Herramientas del panel
 

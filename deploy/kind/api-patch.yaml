@@ -9,6 +9,8 @@ data:
   VALKIRIA_ALLOWED_ORIGINS: http://localhost:8080
   # Ollama corriendo en el equipo anfitrión (Docker Desktop resuelve host.docker.internal).
   VALKIRIA_LLM_BASE_URL: http://host.docker.internal:11434/v1
+  # Chromium en la imagen -browser: ejecuta los scripts web aprobados contra la app sintética (HU-010).
+  VALKIRIA_AUTOMATION_EXECUTE: "true"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -16,6 +18,13 @@ metadata:
   name: valkiria-api
 spec:
   replicas: 1
+  template:
+    spec:
+      containers:
+        - name: api
+          image: ghcr.io/abrahamcimat/qa_valkiria_v1.0:0.5.0-browser
+          resources:
+            limits: {cpu: "2", memory: 2Gi}
 ---
 apiVersion: v1
 kind: Service

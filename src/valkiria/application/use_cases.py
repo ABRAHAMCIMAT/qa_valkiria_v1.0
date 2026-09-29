@@ -141,11 +141,12 @@ _SUFFIX = {"positive": "P", "negative": "N", "edge": "E"}
 _PRIORITY = {"positive": "high", "negative": "high", "edge": "medium"}
 
 
-def matrix_user_prompt(story: UserStory, only: str | None = None) -> str:
-    """Contexto mínimo para diseñar los casos de un criterio: la historia, sus reglas y el criterio."""
+def matrix_user_prompt(story: UserStory, only: str | None = None, ui_guide: str = "") -> str:
+    """Contexto mínimo para diseñar los casos de un criterio: la historia, sus reglas, el criterio y, en modo sintético, las pantallas disponibles."""
     criteria = [c for c in story.acceptance_criteria if only in (None, c.id)]
     rules = "; ".join(story.business_rules) or "ninguna"
-    return f"Historia: {story.title}. {story.description}\nReglas de negocio: {rules}\n" + "\n".join(f"Criterio {c.id}: {c.text}" for c in criteria)
+    prompt = f"Historia: {story.title}. {story.description}\nReglas de negocio: {rules}\n" + "\n".join(f"Criterio {c.id}: {c.text}" for c in criteria)
+    return prompt + (f"\n{ui_guide}" if ui_guide else "")
 
 
 def _preconditions(criterion_text: str) -> list[str]:
@@ -200,12 +201,14 @@ class ValkiriaService:
     """Orquestador de casos de uso; mantiene el transporte fuera del dominio."""
 
     def __init__(self, llm, audit, metrics, stories, azure=None, max_parallel: int = 4, synthetic_app_base_url: str = "http://localhost:8090",
-                 web_runner=None, synthetic_transport=None, database_executor=None):
+                 web_runner=None, synthetic_transport=None, database_executor=None, ui_guide: str = ""):
         self.llm = llm
         # Ejecución de scripts (HU-010): app sintética, runner web opcional y transporte inyectable para pruebas.
         self.synthetic_app_base_url = synthetic_app_base_url
         self.web_runner = web_runner
         self.synthetic_transport = synthetic_transport
+        # Vocabulario de las pantallas sintéticas: los pasos de la matriz nombran campos y botones que existen (HU-010 web).
+        self.ui_guide = ui_guide
         # HU-011: ejecutor seguro de la base sintética (análisis estático, solo perfiles sintéticos).
         self.database_executor = database_executor
         # Límite de llamadas simultáneas al modelo (la matriz genera cada criterio en paralelo).
@@ -364,7 +367,7 @@ class ValkiriaService:
         async with self._parallel:
             for _ in range(2):
                 try:
-                    data = await self.llm.generate_json(system=MATRIX_SYSTEM, user=with_memory(matrix_user_prompt(story, only=criterion.id), memory),
+                    data = await self.llm.generate_json(system=MATRIX_SYSTEM, user=with_memory(matrix_user_prompt(story, only=criterion.id, ui_guide=self.ui_guide), memory),
                                                         schema={"type": "object"})
                 except (LLMProviderError, TimeoutError):
                     continue

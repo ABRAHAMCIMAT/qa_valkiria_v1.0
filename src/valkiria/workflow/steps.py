@@ -298,14 +298,22 @@ async def run_execution(state: WorkflowState, service: ValkiriaService, memory: 
         cases = [case for batch in approved_scripts.payload["batches"] for case in batch.get("cases", [])]
         if platform == "api":
             results += await execute_api_cases(cases, base_url=service.synthetic_app_base_url, transport=service.synthetic_transport)
-        elif service.web_runner is not None:
-            results += [{**r, "kind": "web"} for r in await service.web_runner.run(base_url=service.synthetic_app_base_url, cases=cases)]
-        elif not approved_data:
-            raise StepError("web_execution_unavailable", "La app sintética de Nissan es una API sin interfaz web, así que los scripts web no tienen contra qué ejecutarse en "
-                            "este entorno. Regenera los scripts con un stack de API (Playwright, RestAssured o Postman-Newman) para ejecutarlos aquí, o ejecuta los "
-                            "scripts web en tu pipeline contra la interfaz real.", retryable=False)
         else:
-            notes.append("Los scripts web no se ejecutaron: no hay interfaz web ni runner habilitado en este entorno.")
+            web = None
+            if service.web_runner is not None:
+                try:
+                    # Chromium ejecuta los pasos con la misma traducción que el código entregado (web_steps) contra las pantallas sintéticas.
+                    web = [{**r, "kind": "web"} for r in await service.web_runner.run(base_url=service.synthetic_app_base_url, cases=cases)]
+                except RuntimeError:
+                    web = None
+            if web is not None:
+                results += web
+            elif not approved_data:
+                raise StepError("web_execution_unavailable", "Este entorno no tiene el navegador habilitado para ejecutar scripts web (VALKIRIA_AUTOMATION_EXECUTE con la "
+                                "imagen que incluye Chromium). Puedes regenerar los scripts con un stack de API (Playwright, RestAssured o Postman-Newman) para "
+                                "ejecutarlos aquí, o ejecutarlos en tu pipeline.", retryable=False)
+            else:
+                notes.append("Los scripts web no se ejecutaron: el navegador no está habilitado en este entorno.")
     if approved_data:
         if service.database_executor is None:
             notes.append("Las consultas de datos no se ejecutaron: la base sintética no está configurada en este entorno.")
@@ -318,8 +326,7 @@ async def run_execution(state: WorkflowState, service: ValkiriaService, memory: 
                                    fields={"historia": state.artifacts["story"].payload.get("title"), "stack": f"{framework} ({platform})" if framework else "solo datos",
                                            "casos_api": by_kind["api"], "consultas_datos": by_kind["database"], "casos_web": by_kind["web"],
                                            "aprobados": passed, "fallidos": len(results) - passed, "trace_id": state.trace_id},
-                                   logs=[f"{r['case_id']} [{r.get('kind')}] {r.get('request', '')} -> {r.get('status')} esperado {r.get('expected_status', '')} ({r.get('result', '')})"
-                                         for r in results])
+                                   logs=[_evidence_line(r) for r in results])
     warnings = ["Ejecución en el entorno sintético, nunca en producción.", *notes]
     if passed < len(results):
         warnings.append(f"{len(results) - passed} caso(s) fallidos: revisa la evidencia antes de integrar el pull request.")
@@ -328,6 +335,14 @@ async def run_execution(state: WorkflowState, service: ValkiriaService, memory: 
                        "summary": {"total": len(results), "passed": passed, "failed": len(results) - passed, "errors": sum(r.get("result") == "error" for r in results), **by_kind}},
                       based_on, warnings,
                       f"{passed} de {len(results)} casos aprobados en la ejecución sintética.")
+
+
+def _evidence_line(result: dict[str, Any]) -> str:
+    if result.get("kind") == "web":
+        failure = f" en el paso «{result.get('failed_step')}»: {result.get('detail')}" if result.get("result") == "fail" else ""
+        return (f"{result['case_id']} [web] {result.get('request', '')} -> {result.get('steps_executed', 0)}/{result.get('steps_total', 0)} pasos "
+                f"({result.get('result')}){failure}; captura: {result.get('screenshot') or 'sin captura'}")
+    return f"{result['case_id']} [{result.get('kind')}] {result.get('request', '')} -> {result.get('status')} esperado {result.get('expected_status', '')} ({result.get('result', '')})"
 
 
 RUN_COMMANDS = {"playwright": "npx playwright test", "selenium": "pytest tests", "restassured": "mvn -B test",

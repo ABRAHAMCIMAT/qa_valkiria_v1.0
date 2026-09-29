@@ -64,6 +64,14 @@ services:
 
   api:
     <<: [*valkiria-image, *hardening]
+    # Imagen con Chromium: ejecuta los scripts web aprobados contra las pantallas de la app sintética (HU-010).
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile
+      args:
+        WITH_BROWSER: "true"
+    image: valkiria:0.5.0-browser
+    shm_size: 256mb
     env_file:
       - path: .env
         required: false
@@ -71,6 +79,7 @@ services:
       <<: *internal-env
       VALKIRIA_LLM_BASE_URL: ${VALKIRIA_DOCKER_LLM_BASE_URL:-http://host.docker.internal:11434/v1}
       VALKIRIA_ALLOWED_ORIGINS: http://localhost:8000,http://localhost:3000
+      VALKIRIA_AUTOMATION_EXECUTE: "true"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:

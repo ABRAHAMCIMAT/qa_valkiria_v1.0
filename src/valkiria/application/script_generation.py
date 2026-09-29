@@ -3,9 +3,9 @@
 Determinista (sin esperar al modelo) y trazable: un script por caso con su id, patrón Page Object, datos
 externalizados en un archivo aparte y verificación del resultado esperado.
 
-- Web (Playwright TypeScript, Selenium Python): los pasos se traducen a localizadores semánticos
-  (getByRole/getByLabel/getByText, o su equivalente) derivados del texto del paso. Son un punto de partida
-  ejecutable; si la interfaz real usa otros textos, se ajustan en el Page Object, en un solo lugar.
+- Web (Playwright TypeScript, Selenium Python): los pasos se traducen con web_steps (acción, campo, valor, pantalla y
+  textos esperados) a localizadores semánticos por etiqueta, rol y texto; el runner de Chromium de HU-010 usa la misma
+  traducción. Si la interfaz real usa otros textos, se ajustan en el Page Object, en un solo lugar.
 - API (Playwright request, RestAssured, Postman-Newman): cada caso se asocia a un endpoint real de la app
   sintética de Nissan según su contenido, con el código de estado esperado según el tipo de caso.
 """
@@ -16,6 +16,8 @@ import json
 import re
 import unicodedata
 from typing import Any
+
+from valkiria.application.web_steps import ERROR_ALERT, WebStep, plan_case
 
 # Secretos que nunca deben llegar a un pull request (HU-009, regla 6; RT-05).
 _SECRETS = [
@@ -57,40 +59,6 @@ def _snake(text: str, limit: int = 5) -> str:
     return "_".join(re.findall(r"[a-z0-9]+", _plain(text))[:limit]) or "paso"
 
 
-_QUOTED = re.compile(r"[\"'«“](.+?)[\"'»”]")
-
-
-def _target(step: str) -> str:
-    """Texto visible al que apunta un paso: "Hacer clic en Buscar" → "Buscar"; "Seleccionar el concesionario 'Apodaca'" → "concesionario"."""
-    without_value = _QUOTED.sub("", step).strip()
-    if without_value != step.strip() and _action(step) in {"fill", "select"}:
-        step = without_value
-    elif _QUOTED.search(step):
-        return _QUOTED.search(step).group(1)[:60]
-    body = re.sub(r"^\s*\S+\s*", "", step)  # sin el verbo
-    body = re.sub(r"(?i)^(en|a|el|la|los|las|un|una|de|del)\s+", "", body)
-    body = re.sub(r"(?i)^(boton|botón|campo|enlace|menu|menú|opcion|opción|pestaña|filtro)\s+(de\s+)?", "", body)
-    return (body.strip(" .") or step.strip(" ."))[:60].replace('"', "").replace("'", "")
-
-
-def _default_value(step: str) -> str | None:
-    quoted = _QUOTED.search(step)
-    return quoted.group(1) if quoted else None
-
-
-def _action(step: str) -> str:
-    plain = _plain(step)
-    if re.match(r"(abrir|ir|navegar|acceder|entrar|ingresar a la|visitar)\b", plain):
-        return "open"
-    if re.match(r"(ingresar|escribir|capturar|llenar|introducir|teclear|digitar)\b", plain):
-        return "fill"
-    if re.match(r"(seleccionar|elegir)\b", plain):
-        return "select"
-    if re.match(r"(verificar|validar|comprobar|revisar|confirmar|observar|ver)\b", plain):
-        return "check"
-    return "click"
-
-
 def scan_scripts(files: dict[str, str], case_ids: list[str]) -> dict[str, Any]:
     """HU-009, regla 6: lint mínimo y detección de secretos antes de abrir el pull request."""
     secrets = [name for name, content in files.items() if any(p.search(content) for p in _SECRETS)]
@@ -115,80 +83,157 @@ def generate_scripts(cases: list[dict[str, Any]], *, framework: str, platform: s
 
 
 # --- Web --------------------------------------------------------------------------------------------------
+# La traducción de cada paso sale de web_steps.plan_case, la misma que usa el runner de Chromium (HU-010): lo que se
+# ejecuta localmente contra la app sintética es exactamente lo que el script entregado en el PR hace.
+
+def _js(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _has_value(step: WebStep) -> bool:
+    return step.value is not None or step.data_key is not None
+
+
+def _skipped(step: WebStep) -> str:
+    return "se verifica en el resultado esperado" if step.action == "check" else "sin dato: se conserva el valor por defecto"
+
+
+def _ts_value(step: WebStep) -> str:
+    default = _js(step.value or "")
+    return f"String(data[{_js(step.data_key)}] ?? {default})" if step.data_key else default
+
 
 def _playwright_web(cases: list[dict[str, Any]], feature: str, data: dict[str, Any]) -> dict[str, str]:
-    methods: dict[str, str] = {}
-    for case in cases:
-        for step in case.get("steps") or [case["scenario"]]:
-            name = _ident(step)
-            if name in methods:
-                continue
-            target, action = json.dumps(_target(step), ensure_ascii=False), _action(step)
-            body = {
-                "open": "    await this.page.goto(process.env.BASE_URL ?? '/');",
-                "fill": f"    await this.page.getByLabel(new RegExp({target}, 'i')).fill(String(value ?? ''));",
-                "select": f"    await this.page.getByRole('combobox', {{ name: new RegExp({target}, 'i') }}).selectOption(String(value ?? ''));",
-                "check": f"    await expect(this.page.getByText(new RegExp({target}, 'i')).first()).toBeVisible();",
-                "click": f"    await this.page.getByRole('button', {{ name: new RegExp({target}, 'i') }}).or(this.page.getByText(new RegExp({target}, 'i'))).first().click();",
-            }[action]
-            default = _default_value(step)
-            signature = f"value: unknown = {json.dumps(default, ensure_ascii=False)}" if action in {"fill", "select"} and default else ("value?: unknown" if action in {"fill", "select"} else "")
-            methods[name] = f"  /** {step} */\n  async {name}({signature}) {{\n{body}\n  }}\n"
-    page = (f"import {{ expect, type Page }} from '@playwright/test';\n\n"
-            f"/** Page Object de {feature}: los localizadores semánticos salen de los pasos de la matriz; ajústalos aquí si la interfaz usa otros textos. */\n"
-            f"export class {feature}Page {{\n  constructor(private readonly page: Page) {{}}\n\n" + "\n".join(methods.values()) +
-            "\n  async expectResult(expected: string) {\n    await expect(this.page.getByText(new RegExp(expected.slice(0, 40), 'i')).first()).toBeVisible();\n  }\n}\n")
+    page = (
+        "import { expect, type Page } from '@playwright/test';\n\n"
+        "export function plain(text: string): string {\n  return text.toLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').trim();\n}\n\n"
+        "/** Ignora acentos y mayúsculas: 'vehiculo' encuentra 'Vehículo'. */\n"
+        "export function loose(text: string): RegExp {\n"
+        "  const classes: Record<string, string> = { a: '[aá]', e: '[eé]', i: '[ií]', o: '[oó]', u: '[uúü]', n: '[nñ]' };\n"
+        "  return new RegExp([...plain(text)].map((c) => classes[c] ?? c.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')).join(''), 'i');\n"
+        "}\n\n"
+        f"/** Page Object de {feature}. Las acciones y los localizadores semánticos (etiqueta, rol, texto) salen de los pasos de la matriz;\n"
+        " *  si la interfaz real usa otros textos o rutas, se ajustan aquí, en un solo lugar. */\n"
+        f"export class {feature}Page {{\n  constructor(private readonly page: Page) {{}}\n\n"
+        "  async open(path: string) {\n    await this.page.goto(path);\n  }\n\n"
+        "  async fill(label: string, value: string) {\n    await this.page.getByLabel(loose(label)).first().fill(value);\n  }\n\n"
+        "  async select(label: string, value: string) {\n"
+        "    if (!value) return;  // sin dato: se conserva la opción por defecto\n"
+        "    const list = this.page.getByLabel(loose(label)).first();\n"
+        "    const options = await list.locator('option').evaluateAll((items) => items.map((o) => ({ value: (o as HTMLOptionElement).value, text: o.textContent ?? '' })));\n"
+        "    const wanted = plain(value);\n"
+        "    const match = options.find((o) => o.value === value || plain(o.text).includes(wanted) || (plain(o.text) !== '' && wanted.includes(plain(o.text))));\n"
+        "    if (!match) throw new Error(`Sin opción \"${value}\" en ${label}`);\n"
+        "    await list.selectOption(match.value);\n  }\n\n"
+        "  /** Primero el botón; el enlace solo si no hay botón con ese nombre. */\n"
+        "  async click(name: string) {\n"
+        "    const button = this.page.getByRole('button', { name: loose(name) });\n"
+        "    await ((await button.count()) ? button : this.page.getByRole('link', { name: loose(name) })).first().click();\n  }\n\n"
+        "  async tick(label: string, on = true) {\n"
+        "    const box = this.page.getByLabel(loose(label)).first();\n    await (on ? box.check() : box.uncheck());\n  }\n\n"
+        "  async see(texts: string[]) {\n"
+        "    for (const text of texts) await expect(this.page.getByText(loose(text)).first()).toBeVisible();\n  }\n\n"
+        "  /** Resultado esperado: sus textos visibles y, según el caso, que haya o no un aviso de error. */\n"
+        "  async expectResult(texts: string[], expectError: boolean) {\n"
+        "    await this.see(texts);\n"
+        f"    const errors = this.page.locator({_js(ERROR_ALERT)});\n"
+        "    if (expectError) await expect(errors.first()).toBeVisible();\n    else await expect(errors).toHaveCount(0);\n  }\n}\n")
     files = {f"tests/pages/{feature}Page.ts": page, f"tests/data/{_snake(feature)}.json": json.dumps(data, ensure_ascii=False, indent=2) + "\n",
              "playwright.config.ts": "import { defineConfig } from '@playwright/test';\n\nexport default defineConfig({\n  testDir: './tests/specs',\n"
-                                     "  use: { baseURL: process.env.BASE_URL, screenshot: 'only-on-failure', trace: 'retain-on-failure' },\n"
+                                     "  use: { baseURL: process.env.BASE_URL ?? 'http://localhost:8090', screenshot: 'only-on-failure', trace: 'retain-on-failure' },\n"
                                      "  reporter: [['list'], ['junit', { outputFile: 'test-results.xml' }]],\n});\n",
              "tsconfig.json": json.dumps({"compilerOptions": {"target": "ES2022", "module": "commonjs", "strict": True, "esModuleInterop": True, "resolveJsonModule": True}}, indent=2) + "\n"}
     for case in cases:
-        steps = "\n".join(
-            f"  await test.step({json.dumps(step, ensure_ascii=False)}, async () => {{ await app.{_ident(step)}("
-            f"{'data[' + json.dumps(next(iter(case.get('data') or {}), ''), ensure_ascii=False) + ']' if _action(step) in {'fill', 'select'} and case.get('data') else ''}); }});"
-            for step in (case.get("steps") or [case["scenario"]]))
+        plan = plan_case(case)
+        lines = [f"  await test.step('Abrir la pantalla', async () => {{ await app.open({_js(plan.route)}); }});"]
+        for step in plan.steps:
+            call = {"open": f"app.open({_js(step.target)})",
+                    "fill": f"app.fill({_js(step.target)}, {_ts_value(step)})" if _has_value(step) else None,
+                    "select": f"app.select({_js(step.target)}, {_ts_value(step)})" if _has_value(step) else None,
+                    "check": f"app.see({_js(step.anchors)})" if step.anchors else None,
+                    "click": f"app.click({_js(step.target)})",
+                    "tick": f"app.tick({_js(step.target)}, {'false' if step.value == 'off' else 'true'})"}[step.action]
+            body = f"await {call};" if call else f"/* {_skipped(step)} */"
+            lines.append(f"  await test.step({_js(step.text)}, async () => {{ {body} }});")
         files[f"tests/specs/{_snake(case['id'], 8)}.spec.ts"] = (
             f"import {{ test }} from '@playwright/test';\nimport {{ {feature}Page }} from '../pages/{feature}Page';\nimport cases from '../data/{_snake(feature)}.json';\n\n"
             f"// Trazabilidad: {case['id']} · criterio {case.get('criterion_id')} · {case.get('type')}\n"
-            f"test({json.dumps(case['id'] + ': ' + case['scenario'], ensure_ascii=False)}, {{ tag: ['@{case.get('type')}', '@{case.get('criterion_id')}'] }}, async ({{ page }}) => {{\n"
-            f"  const app = new {feature}Page(page);\n  const data = cases[{json.dumps(case['id'])}] as Record<string, unknown>;\n"
-            f"{steps}\n  await test.step('Resultado esperado', async () => {{ await app.expectResult({json.dumps(case.get('expected_result', ''), ensure_ascii=False)}); }});\n}});\n")
+            f"test({_js(case['id'] + ': ' + case['scenario'])}, {{ tag: ['@{case.get('type')}', '@{case.get('criterion_id')}'] }}, async ({{ page }}) => {{\n"
+            f"  const app = new {feature}Page(page);\n  const data = (cases as Record<string, Record<string, unknown>>)[{_js(case['id'])}] ?? {{}};\n"
+            + "\n".join(lines) +
+            f"\n  // {case.get('expected_result', '')}\n"
+            f"  await test.step('Resultado esperado', async () => {{ await app.expectResult({_js(plan.anchors)}, {'true' if plan.expect_error else 'false'}); }});\n}});\n")
     return files
 
 
+def _py_value(step: WebStep) -> str:
+    default = _js(step.value or "")
+    return f"str(data.get({_js(step.data_key)}, {default}))" if step.data_key else default
+
+
 def _selenium(cases: list[dict[str, Any]], feature: str, data: dict[str, Any]) -> dict[str, str]:
-    methods: dict[str, str] = {}
-    for case in cases:
-        for step in case.get("steps") or [case["scenario"]]:
-            name = _snake(step)
-            if name in methods:
-                continue
-            target, action = _target(step).replace("'", ""), _action(step)
-            body = {
-                "open": "        self.driver.get(os.getenv('BASE_URL', 'http://localhost:8090'))",
-                "fill": f"        field = self.driver.find_element(By.XPATH, \"//label[contains(., '{target}')]/following::input[1]\")\n        field.clear()\n        field.send_keys(str(value or ''))",
-                "select": f"        Select(self.driver.find_element(By.XPATH, \"//label[contains(., '{target}')]/following::select[1]\")).select_by_visible_text(str(value or ''))",
-                "check": f"        assert self.driver.find_element(By.XPATH, \"//*[contains(., '{target}')]\").is_displayed()",
-                "click": f"        self.driver.find_element(By.XPATH, \"//*[self::button or self::a][contains(., '{target}')]\").click()",
-            }[action]
-            default = _default_value(step)
-            param = (f", value={json.dumps(default, ensure_ascii=False)}" if default else ", value=None") if action in {"fill", "select"} else ""
-            methods[name] = f"    def {name}(self{param}):\n        \"\"\"{step.replace(chr(34), chr(39))}\"\"\"\n{body}\n"
-    page = ("import os\n\nfrom selenium.webdriver.common.by import By\nfrom selenium.webdriver.support.ui import Select\n\n\n"
-            f"class {feature}Page:\n    \"\"\"Page Object de {feature}: los localizadores salen de los pasos de la matriz; ajústalos aquí.\"\"\"\n\n"
-            "    def __init__(self, driver):\n        self.driver = driver\n\n" + "\n".join(methods.values()) +
-            "\n    def expect_result(self, expected):\n        assert expected[:40].lower() in self.driver.page_source.lower()\n")
+    page = (
+        "import os\nimport re\nimport unicodedata\n\n"
+        "from selenium.common.exceptions import TimeoutException\nfrom selenium.webdriver.common.by import By\n"
+        "from selenium.webdriver.support import expected_conditions as ec\nfrom selenium.webdriver.support.ui import Select, WebDriverWait\n\n"
+        "BASE_URL = os.getenv('BASE_URL', 'http://localhost:8090')\n\n\n"
+        "def plain(text):\n    return ''.join(c for c in unicodedata.normalize('NFD', str(text).lower()) if unicodedata.category(c) != 'Mn').strip()\n\n\n"
+        f"class {feature}Page:\n    \"\"\"Page Object de {feature}: acciones y localizadores salen de los pasos de la matriz; si la interfaz usa otros textos, se ajustan aquí.\"\"\"\n\n"
+        "    def __init__(self, driver):\n        self.driver = driver\n\n"
+        "    def open(self, path):\n        self.driver.get(BASE_URL.rstrip('/') + path)\n\n"
+        "    def _labelled(self, label):\n"
+        "        for element in self.driver.find_elements(By.TAG_NAME, 'label'):\n"
+        "            if plain(label) in plain(element.text):\n"
+        "                target = element.get_attribute('for')\n"
+        "                return self.driver.find_element(By.ID, target) if target else element.find_element(By.XPATH, './/input|.//select')\n"
+        "        raise AssertionError(f'Sin campo con la etiqueta {label}')\n\n"
+        "    def fill(self, label, value):\n        field = self._labelled(label)\n        field.clear()\n        field.send_keys(str(value))\n\n"
+        "    def select(self, label, value):\n"
+        "        if not value:\n            return  # sin dato: se conserva la opción por defecto\n"
+        "        options = Select(self._labelled(label))\n"
+        "        match = next((o for o in options.options if o.get_attribute('value') == str(value) or plain(value) in plain(o.text)\n"
+        "                      or (plain(o.text) and plain(o.text) in plain(value))), None)\n"
+        "        assert match is not None, f'Sin opción {value} en {label}'\n"
+        "        options.select_by_value(match.get_attribute('value'))\n\n"
+        "    def click(self, name):\n"
+        "        # Primero el botón; el enlace solo si no hay botón con ese nombre.\n"
+        "        for element in self.driver.find_elements(By.TAG_NAME, 'button') + self.driver.find_elements(By.TAG_NAME, 'a'):\n"
+        "            if plain(name) in plain(element.text):\n                element.click()\n"
+        "                try:  # si el clic envía un formulario, espera a la página nueva\n"
+        "                    WebDriverWait(self.driver, 2).until(ec.staleness_of(element))\n"
+        "                except TimeoutException:\n                    pass\n"
+        "                return\n"
+        "        raise AssertionError(f'Sin botón o enlace {name}')\n\n"
+        "    def tick(self, label, on=True):\n"
+        "        box = self._labelled(label)\n        if box.is_selected() != on:\n            box.click()\n\n"
+        "    def see(self, texts, timeout=5):\n"
+        "        for text in texts:\n"
+        "            try:\n"
+        "                WebDriverWait(self.driver, timeout).until(lambda d, t=text: plain(t) in plain(d.find_element(By.TAG_NAME, 'body').text))\n"
+        "            except TimeoutException:\n                raise AssertionError(f'No se ve: {text}') from None\n\n"
+        "    def expect_result(self, texts, expect_error):\n"
+        "        self.see(texts)\n"
+        f"        errors = self.driver.find_elements(By.CSS_SELECTOR, {_js(ERROR_ALERT)})\n"
+        "        assert bool(errors) == expect_error, 'Se esperaba un aviso de error' if expect_error else f'Aviso de error inesperado: {errors[0].text}'\n")
     files = {f"tests/pages/{_snake(feature)}_page.py": page, f"tests/data/{_snake(feature)}.json": json.dumps(data, ensure_ascii=False, indent=2) + "\n",
-             "tests/conftest.py": "import pytest\nfrom selenium import webdriver\n\n\n@pytest.fixture\ndef driver():\n    driver = webdriver.Chrome()\n    yield driver\n    driver.quit()\n"}
+             "tests/conftest.py": "import pytest\nfrom selenium import webdriver\n\n\n@pytest.fixture\ndef driver():\n    options = webdriver.ChromeOptions()\n"
+                                  "    options.add_argument('--headless=new')\n    driver = webdriver.Chrome(options=options)\n    yield driver\n    driver.quit()\n"}
     for case in cases:
-        calls = "\n".join(f"    page.{_snake(step)}({'data.get(' + json.dumps(next(iter(case.get('data') or {}), '')) + ')' if _action(step) in {'fill', 'select'} and case.get('data') else ''})"
-                          for step in (case.get("steps") or [case["scenario"]]))
+        plan = plan_case(case)
+        lines = [f"    page.open({_js(plan.route)})"]
+        for step in plan.steps:
+            call = {"open": f"page.open({_js(step.target)})",
+                    "fill": f"page.fill({_js(step.target)}, {_py_value(step)})" if _has_value(step) else None,
+                    "select": f"page.select({_js(step.target)}, {_py_value(step)})" if _has_value(step) else None,
+                    "check": f"page.see({_js(step.anchors)})" if step.anchors else None, "click": f"page.click({_js(step.target)})",
+                    "tick": f"page.tick({_js(step.target)}, {step.value != 'off'})"}[step.action]
+            lines.append(f"    # {step.text}\n    {call}" if call else f"    # {step.text} ({_skipped(step)})")
         files[f"tests/test_{_snake(case['id'], 8)}.py"] = (
             f"import json\nfrom pathlib import Path\n\nfrom pages.{_snake(feature)}_page import {feature}Page\n\n"
             f"DATA = json.loads((Path(__file__).parent / 'data' / '{_snake(feature)}.json').read_text(encoding='utf-8'))\n\n\n"
             f"def test_{_snake(case['id'], 8)}(driver):\n    \"\"\"{case['id']} · criterio {case.get('criterion_id')} · {case.get('type')}: {case['scenario']}\"\"\"\n"
-            f"    page = {feature}Page(driver)\n    data = DATA[{json.dumps(case['id'])}]\n{calls}\n    page.expect_result({json.dumps(case.get('expected_result', ''), ensure_ascii=False)})\n")
+            f"    page = {feature}Page(driver)\n    data = DATA.get({_js(case['id'])}, {{}})\n" + "\n".join(lines) +
+            f"\n    # Resultado esperado: {case.get('expected_result', '')}\n    page.expect_result({_js(plan.anchors)}, {plan.expect_error})\n")
     return files
 
 

@@ -8,6 +8,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.pool import StaticPool
 
 from valkiria.infrastructure.settings import Settings
+from valkiria.synthetic_app.web import mount_web
 
 SCHEMA = (
     "CREATE TABLE IF NOT EXISTS vehicles (vehicle_id INTEGER PRIMARY KEY, model VARCHAR(100) NOT NULL, year INTEGER NOT NULL, price NUMERIC(12,2) NOT NULL, stock INTEGER NOT NULL)",
@@ -94,4 +95,6 @@ def create_synthetic_app(database_url: str | None = None) -> FastAPI:
     async def service_appointments():
         return {"items": rows("SELECT * FROM service_appointments")}
 
+    # Pantallas web mínimas para ejecutar localmente los scripts web (HU-010).
+    mount_web(app, engine)
     return app

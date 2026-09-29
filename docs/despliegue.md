@@ -39,7 +39,7 @@ docker build -f deploy/docker/Dockerfile -t valkiria:0.5.0 .
 | Contexto | `.dockerignore` excluye `.venv`, `.env`, `.git`, pruebas y documentación |
 | Tamaño | Unos 300 MB |
 
-La imagen no incluye navegadores de Playwright; `VALKIRIA_AUTOMATION_EXECUTE=true` requiere una imagen derivada con Chromium.
+La imagen base no incluye navegadores. La variante `--build-arg WITH_BROWSER=true` (etiqueta `-browser`, unos 2 GB) agrega Playwright y Chromium en `/ms-playwright`, de solo lectura, para ejecutar los scripts web contra la app sintética (HU-010). Compose y kind la usan para la API con `VALKIRIA_AUTOMATION_EXECUTE=true`; la app sintética sigue con la imagen base. En AKS el valor por defecto sigue siendo `false`.
 
 ## Entorno de desarrollo con Docker Compose
 

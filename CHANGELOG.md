@@ -2,6 +2,42 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/).
 
+## 2026-09-29 — Pantallas web sintéticas y ejecución de scripts web (incremento 2)
+
+### Añadido
+- **Pantallas web mínimas** en la app sintética (`synthetic_app/web.py`): consulta de inventario (`/ui`), registro de orden de venta (`/ui/orders`) y citas de servicio (`/ui/appointments`). Son HTML accesible, con etiquetas, roles y avisos `role=alert`.
+- **Semántica compartida de los pasos web** (`application/web_steps.py`):
+  - Cada paso se traduce a una acción concreta y cada resultado esperado a textos visibles y aviso de error.
+  - Los pasos se aterrizan en el catálogo de pantallas: botón o campo real, navegación entre pantallas, datos del caso antes de enviar el formulario.
+  - Un paso sin correspondencia falla señalándolo; nunca se omite.
+- **Runner web** (`PlaywrightRunner`): ejecuta los pasos en Chromium y reporta por caso los pasos ejecutados, el paso que falla con su motivo y la captura. La tarjeta de ejecución muestra la captura de las fallas.
+- **Imagen `-browser`** (`--build-arg WITH_BROWSER=true`) con Chromium de solo lectura. La API de Compose y kind la usa con `VALKIRIA_AUTOMATION_EXECUTE=true`.
+- La matriz recibe, en modo sintético, el catálogo de pantallas y los datos que existen (`UI_GUIDE`), para que sus casos sean ejecutables.
+- **Pruebas:**
+  - semántica de pasos;
+  - código generado;
+  - flujo con un runner de prueba;
+  - E2E del runner real en Chromium contra la app sintética (en CI con `playwright install chromium`).
+
+### Cambiado
+- El código Playwright (TypeScript) y Selenium (Python) generado usa la misma traducción que el runner:
+  - abre la pantalla del caso en lugar de la raíz del sitio;
+  - verifica textos visibles y el aviso de error en lugar de una frase literal de 40 caracteres;
+  - hace clic primero en el botón y solo después en un enlace;
+  - Selenium espera la página nueva tras enviar un formulario.
+  
+  Se verificó ejecutando el código generado con `npx playwright test` y con Selenium: dan los mismos resultados que el runner.
+- Sin navegador habilitado, ejecutar scripts web explica cómo habilitarlo y ofrece un stack de API.
+
+### Verificado en vivo (Llama 3.2, Compose y kind)
+- **HU de órdenes de venta:** 15 casos web ejecutados en Chromium en 26 s, con 10 aprobados. Antes del aterrizaje de pasos, la misma matriz daba 0 de 15.
+- **HU de inventario por concesionario:** 12 casos, con 5 aprobados y todos los pasos ejecutados.
+- **Fallidos:** son errores reales de diseño del caso, cada uno con su motivo:
+  - mensajes inventados ("Error de conexión");
+  - expectativas que contradicen los datos (concesionario inactivo con la expectativa "sin stock");
+  - pasos que nunca envían el formulario.
+- Chromium corre dentro del pod de kind con sistema de archivos de solo lectura.
+
 ## 2026-09-29 — HU-011 en el flujo y ejecución unificada HU-010 (incremento 1)
 
 ### Añadido

@@ -15,7 +15,9 @@ kubectl config use-context "kind-$CLUSTER" >/dev/null
 
 echo "==> Construyendo y cargando la imagen $IMAGE"
 docker build -q -f "$ROOT/deploy/docker/Dockerfile" -t "$IMAGE" "$ROOT"
-kind load docker-image "$IMAGE" --name "$CLUSTER"
+# Variante con Chromium para la API: ejecuta los scripts web contra la app sintética (HU-010).
+docker build -q -f "$ROOT/deploy/docker/Dockerfile" --build-arg WITH_BROWSER=true -t "$IMAGE-browser" "$ROOT"
+kind load docker-image "$IMAGE" "$IMAGE-browser" --name "$CLUSTER"
 
 echo "==> Aplicando manifiestos"
 kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
