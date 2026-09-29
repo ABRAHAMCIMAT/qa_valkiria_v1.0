@@ -59,11 +59,3 @@ class OpenAICompatibleLLM:
 
 class LlamaProvider(OpenAICompatibleLLM):
     pass
-
-
-class DeepSeekProvider(OpenAICompatibleLLM):
-    pass
-
-
-class QwenProvider(OpenAICompatibleLLM):
-    pass
