@@ -142,6 +142,39 @@ class WorkflowEngine:
             await self._learn_from_approval(state, artifact, decision, actor, comment, details)
             return await self._run(state)
 
+    async def adopt_story(self, *, story: dict[str, Any], requirement: str, actor: str, namespace: str = "default", assumptions: list[str] | None = None,
+                          warnings: list[str] | None = None, trace_id: str | None = None) -> tuple[WorkflowState, WorkflowPlan]:
+        """Inicia un flujo con una HU ya redactada en la conversación (HU-003B), sin volver a generarla."""
+        state = WorkflowState(actor=actor, goals=["story"], params={"requirement": requirement, "namespace": namespace})
+        if trace_id:
+            state.trace_id = trace_id
+        state.put_artifact("story", story, produced_by="story", based_on={}, warnings=["Borrador generado por IA (HU-003B)."] + (warnings or []),
+                           assumptions=assumptions, model=getattr(self.service.llm, "model_name", None), prompt_version=PROMPT_VERSION)
+        state.think("executed", f"HU-003B: HU '{story.get('title')}' redactada en la conversación. Resultado: 'story' v1.", "story")
+        state = await self.store.save(state)
+        async with self._lock(state.id):
+            return await self._run(state)
+
+    async def revise_story(self, workflow_id: str, *, payload: dict[str, Any], actor: str, instruction: str,
+                           produced_by: str = "ai_edit") -> tuple[WorkflowState, WorkflowPlan]:
+        """Toda modificación de la HU crea la versión N+1 (HU-003A): la anterior queda en el historial y lo que dependía de ella se regenera."""
+        async with self._lock(workflow_id):
+            state = await self._load(workflow_id)
+            current = state.artifacts.get("story")
+            if not current:
+                raise WorkflowConflict("artifact_not_editable:story")
+            payload = payload | {"id": current.payload["id"], "version": current.version + 1}
+            try:
+                UserStory.model_validate(payload)
+            except ValidationError as exc:
+                raise WorkflowConflict(f"invalid_story:{exc.error_count()}_errors") from exc
+            note = f"Nueva versión generada por IA a partir de la instrucción: \"{instruction[:200]}\"." if produced_by == "ai_edit" else f"Editado por {actor}."
+            record = state.put_artifact("story", payload, produced_by=produced_by, based_on=current.based_on, warnings=["Borrador generado por IA.", note],
+                                        model=getattr(self.service.llm, "model_name", None), prompt_version=PROMPT_VERSION)
+            state.think("edit", f"{actor} pidió modificar la HU; queda v{record.version} pendiente de aprobación.", "story")
+            await self._remember(state, "po_preference", f"Al refinar la HU '{payload.get('title')}', el PO pidió: {instruction[:300]}", "edit:story", actor, ["story"])
+            return await self._run(state)
+
     async def edit(self, workflow_id: str, *, artifact: str, payload: dict[str, Any], actor: str) -> tuple[WorkflowState, WorkflowPlan]:
         """Edición humana de la HU o la matriz: crea una versión nueva y vuelve a exigir aprobación."""
         async with self._lock(workflow_id):

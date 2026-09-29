@@ -123,7 +123,7 @@ def build_toolbox(*, service: ValkiriaService | None, memory: MemoryService | No
             return {"error": "Indica el id del flujo (workflow_id)."}
         state, plan = await workflows.get(str(workflow_id))
         return {"id": state.id, "estado": plan.status, "objetivos": state.goals, "aprobaciones_pendientes": plan.pending_approvals, "datos_faltantes": plan.missing_inputs,
-                "artefactos": {k: {"version": r.version, "aprobado": r.approved} for k, r in state.artifacts.items()},
+                "artefactos": {k: {"version": r.version, "aprobado": r.approved, "detalle": _artifact_detail(k, r.payload)} for k, r in state.artifacts.items()},
                 "fallos": {k: f.error_code for k, f in state.failures.items()}, "siguientes_acciones": plan.next_actions(state)[:5]}
 
     async def redactar_historia(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -175,7 +175,8 @@ def build_toolbox(*, service: ValkiriaService | None, memory: MemoryService | No
     box.register(Tool("buscar_memoria", "tool", "Memoria del equipo", "Busca HU aprobadas, preferencias del PO, correcciones y lecciones anteriores.", buscar_memoria,
                       (Param("consulta", "string", "qué buscar"),), ("antes", "anterior", "recuerda", "memoria", "aprobada", "preferencia", "leccion")))
     box.register(Tool("estado_flujo", "tool", "Estado de un flujo", "Estado, aprobaciones pendientes, artefactos y siguientes pasos de un flujo por historia.", estado_flujo,
-                      (Param("workflow_id", "string", "id del flujo", required=False),), ("flujo", "estado", "pendiente", "aprobacion", "avance")))
+                      (Param("workflow_id", "string", "id del flujo", required=False),),
+                      ("flujo", "estado", "pendiente", "aprobacion", "avance", "version", "cuanto", "cuantos", "tiene", "historia", "hu", "matriz", "riesgo", "invest")))
     if service:
         box.register(Tool("redactar_historia", "skill", "Redactar historia de usuario", "Redacta una HU en borrador con criterios Dado/Cuando/Entonces (HU-003B).", redactar_historia,
                           (Param("requerimiento", "string", "requerimiento en lenguaje natural"),), ("historia", "hu", "requerimiento", "redactar")))
@@ -283,13 +284,37 @@ def _sum_memoria(r: dict[str, Any]) -> Summary:
     return Summary("Recuerdos del equipo:\n" + "\n".join(f"- [{m['tipo']}] {m['contenido']}" for m in found), verbatim=True)
 
 
+_NAMES = {"story": "HU", "invest": "INVEST", "matrix": "matriz", "risk": "riesgo", "automation": "scripts", "pipeline": "pipeline",
+          "performance_design": "diseño de performance", "azure_work_item": "Work Item"}
+
+
+def _artifact_detail(key: str, payload: dict[str, Any]) -> str:
+    if key == "story":
+        return f"«{payload.get('title')}», {len(payload.get('acceptance_criteria', []))} criterios de aceptación"
+    if key == "invest":
+        return f"cumple {sum(c.get('status') == 'cumple' for c in payload.get('criteria', []))} de 6 criterios"
+    if key == "matrix":
+        cases = payload.get("cases", [])
+        return f"{len(cases)} casos ({sum(c.get('type') == 'positive' for c in cases)} positivos, {sum(c.get('type') == 'negative' for c in cases)} negativos, " \
+               f"{sum(c.get('type') == 'edge' for c in cases)} de borde)"
+    if key == "risk":
+        return f"nivel {payload.get('level')}" + (f", {payload['score_total']} de 15" if payload.get("score_total") else "")
+    if key == "automation":
+        return f"{sum(len(b.get('case_ids', [])) for b in payload.get('batches', []))} scripts"
+    if key == "performance_design":
+        return f"{payload.get('users')} usuarios, SLA p95 {payload.get('target_sla_ms')} ms"
+    if key == "azure_work_item":
+        return f"proyecto {payload.get('project')}"
+    return ""
+
+
 def _sum_flujo(r: dict[str, Any]) -> Summary:
     if "error" in r:
         return Summary(r["error"], verbatim=True)
-    pending = ", ".join(r["aprobaciones_pendientes"]) or "ninguna"
-    artifacts = ", ".join(f"{k} v{v['version']}{' (aprobado)' if v['aprobado'] else ''}" for k, v in r["artefactos"].items()) or "ninguno"
-    return Summary(f"El flujo {r['id']} está en estado '{r['estado']}'. Aprobaciones pendientes: {pending}. Artefactos: {artifacts}."
-                   + (f" Faltan datos: {', '.join(r['datos_faltantes'])}." if r["datos_faltantes"] else ""), (r["estado"],))
+    lines = [f"- {_NAMES.get(k, k)} v{v['version']}{' (aprobado)' if v['aprobado'] else ''}: {v['detalle']}".rstrip(": ") for k, v in r["artefactos"].items()]
+    pending = ", ".join(_NAMES.get(a, a) for a in r["aprobaciones_pendientes"]) or "ninguna"
+    return Summary("Así va la historia en curso:\n" + "\n".join(lines) + f"\nAprobaciones pendientes: {pending}."
+                   + (f" Faltan datos: {', '.join(r['datos_faltantes'])}." if r["datos_faltantes"] else ""), verbatim=True)
 
 
 def _sum_historia(r: dict[str, Any]) -> Summary:

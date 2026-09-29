@@ -140,6 +140,29 @@
   .input-foot { display: flex; justify-content: space-between; gap: 12px; max-width: 800px; margin: 8px auto 0; font-size: 11px; color: var(--muted); }
   kbd { font-family: inherit; font-size: 10.5px; border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; color: var(--muted-2); }
 
+  /* Flujo completo */
+  .steps { list-style: none; display: flex; flex-direction: column; }
+  .steps li { display: flex; align-items: flex-start; gap: 10px; padding: 7px 0; font-size: 12.5px; color: var(--muted); position: relative; }
+  .steps li:not(:last-child)::after { content: ''; position: absolute; left: 4px; top: 22px; bottom: -8px; width: 1px; background: var(--border); }
+  .steps .state { width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid #3a4459; background: var(--bg-2); flex-shrink: 0; z-index: 1; margin-top: 4px; }
+  .steps li.done { color: var(--muted-2); } .steps li.done .state { background: var(--green); border-color: var(--green); }
+  .steps li.action .state, .steps li.stale .state { background: var(--amber); border-color: var(--amber); }
+  .steps li.action, .steps li.next { color: var(--text); }
+  .steps li.next .state { border-color: var(--accent); background: var(--accent); animation: pulse 1.6s ease-in-out infinite; }
+  .steps li.failed .state { background: var(--red); border-color: var(--red); }
+  .steps li.skipped { opacity: .55; }
+  .steps .hu { margin-left: auto; font-size: 10.5px; color: var(--muted); white-space: nowrap; }
+  .steps .sub { display: block; font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .step-btn { margin-top: 5px; font-size: 11.5px; padding: 3px 8px; }
+  .versions { margin-top: 8px; font-size: 11.5px; color: var(--muted); line-height: 1.7; }
+  .resume { margin-top: 10px; font-size: 12.5px; color: var(--muted); border-left: 2px solid var(--accent); padding-left: 10px; }
+  .form { margin-top: 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-2); padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+  .form label { font-size: 12.5px; color: var(--muted-2); display: flex; flex-direction: column; gap: 5px; }
+  .form input[type=text], .form input[type=number] { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; color: var(--text); padding: 7px 9px; font-family: inherit; font-size: 13px; }
+  .form .row { display: flex; gap: 10px; align-items: flex-start; }
+  .form .row input[type=checkbox] { margin-top: 3px; }
+  pre.code { background: var(--bg-2); border-top: 1px solid var(--border-soft); padding: 12px 16px; font-size: 11.5px; color: var(--muted-2); overflow-x: auto; max-height: 280px; }
+
   @media (max-width: 900px) { aside { display: none; } .title p, .env-tag, .divider { display: none; } header { padding: 10px 16px; } .thread-inner { padding: 20px 16px 8px; } .input-bar { padding: 12px 16px; } .input-foot span:last-child { display: none; } .turn.user .body { max-width: 90%; } }
 </style>
 </head>
@@ -177,27 +200,26 @@
 <div class="layout">
   <aside>
     <div class="side-section">
-      <h3>Sesión actual</h3>
+      <h3>Historia en curso</h3>
       <div id="session"></div>
     </div>
     <div class="side-section">
-      <h3>Flujo de agentes</h3>
-      <ul class="pipeline" id="pipeline"></ul>
+      <h3>Flujo completo</h3>
+      <ul class="steps" id="steps"></ul>
     </div>
     <div class="side-section">
       <h3>Herramientas</h3>
-      <div class="tool"><div><strong>Casos manuales</strong><small>Matriz · Exportación Excel</small></div><button class="btn" onclick="exportCases()">Exportar</button></div>
-      <div class="tool"><div><strong>Scripts por lotes</strong><small>HU-010 · Playwright · PR obligatorio</small></div><button class="btn" onclick="generateAutomationBatch()">Generar</button></div>
+      <div class="tool"><div><strong>Casos manuales</strong><small>Exportar la matriz a Excel</small></div><button class="btn" onclick="act({type:'export_matrix'}, 'Exporta la matriz a Excel.')">Exportar</button></div>
       <div class="tool"><div><strong>Validación de base de datos</strong><small>HU-011 · PostgreSQL sintético</small></div><button class="btn" onclick="executeDatabaseDemo()">Ejecutar</button></div>
     </div>
-    <div class="side-foot">Los artefactos se generan como borrador. Ningún cambio se publica sin aprobación humana y Pull Request.</div>
+    <div class="side-foot">Los artefactos se generan como borrador. Nada se publica sin aprobación humana y Pull Request. Puedes preguntarme lo que necesites en cualquier paso: lo atiendo y seguimos donde íbamos.</div>
   </aside>
 
   <main>
     <div class="thread" id="thread"><div class="thread-inner" id="chat">
       <section class="empty" id="empty">
         <h2>¿Qué vamos a probar hoy?</h2>
-        <p>Describe un requerimiento con tus palabras. Lo convierto en una historia de usuario con criterios verificables y, desde ahí, seguimos juntos: ajustes, evaluación INVEST, matriz de pruebas y análisis de riesgo.</p>
+        <p>Describe un requerimiento con tus palabras. Lo convierto en una historia de usuario y te acompaño en todo el flujo: evaluación INVEST, nuevas versiones, aprobación, matriz de pruebas, riesgo, scripts de automatización, pipeline de Azure DevOps, diseño de performance y Work Item. En cualquier momento puedes preguntarme algo o pedirme un cambio; lo atiendo y retomamos donde íbamos.</p>
         <div class="examples">
           <div class="label" style="margin:0">Para empezar</div>
           <button class="example" data-msg="Necesito que los vendedores puedan consultar el inventario de vehículos Nissan disponible por agencia"><svg class="icon-svg"><use href="#i-car"></use></svg>Consulta de inventario de vehículos por agencia<svg class="icon-svg arrow"><use href="#i-arrow-right"></use></svg></button>
@@ -210,7 +232,7 @@
 
     <div class="input-bar">
       <div class="input-wrap">
-        <textarea id="input" rows="1" placeholder="Describe un requerimiento o pide un ajuste a la historia actual…"></textarea>
+        <textarea id="input" rows="1" placeholder="Describe un requerimiento, pide un cambio a la historia o pregúntame lo que necesites…"></textarea>
         <button class="send-btn" id="sendBtn" onclick="send()" aria-label="Enviar"><svg class="icon-svg"><use href="#i-send"></use></svg></button>
       </div>
       <div class="input-foot"><span><kbd>Enter</kbd> enviar · <kbd>Shift</kbd>+<kbd>Enter</kbd> nueva línea</span><span>Contenido generado con IA: revísalo antes de aprobarlo.</span></div>
@@ -224,26 +246,41 @@ const ACTOR = 'Carlos Carballo';
 const chat = document.getElementById('chat'), thread = document.getElementById('thread');
 const input = document.getElementById('input'), sendBtn = document.getElementById('sendBtn');
 
-const AGENTS = [['intake','Intake','Solicitud'],['grounding','Grounding','Políticas'],['generation','Generación','Historia'],['evaluation','Evaluación','INVEST · Riesgo'],['automation','Automatización','Scripts'],['database','Base de datos','Validación'],['approval','Aprobación','Humana']];
-const state = { sessionId: null, history: [], story: null, done: new Set(), busy: false, invest: null, risk: null, cases: null, testCases: [] };
+const state = { sessionId: null, flow: null, busy: false };
 
 function icon(n){ return '<svg class="icon-svg"><use href="#i-'+n+'"></use></svg>'; }
 function esc(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function time(){ return new Date().toLocaleTimeString('es-MX', {hour:'2-digit', minute:'2-digit'}); }
 function scroll(){ thread.scrollTop = thread.scrollHeight; }
 
-function renderPipeline(running = []){
-  document.getElementById('pipeline').innerHTML = AGENTS.map(([id,name,role]) =>
-    '<li class="'+(running.includes(id)?'running':state.done.has(id)?'done':'')+'"><span class="state"></span>'+name+'<span class="role">'+role+'</span></li>').join('');
-}
-function renderSession(){
-  const el = document.getElementById('session'), s = state.story;
-  if(!s){ el.innerHTML = '<p class="session-empty">Aún no hay una historia en curso. Describe un requerimiento para comenzar.</p>'; return; }
-  const chips = ['<span class="chip">v'+s.version+'</span>','<span class="chip">Borrador</span>','<span class="chip">'+s.acceptance_criteria.length+' criterios</span>'];
-  if(state.invest) chips.push('<span class="chip '+(state.invest.ok===state.invest.total?'ok':'warn')+'">INVEST '+state.invest.ok+'/'+state.invest.total+'</span>');
-  if(state.risk) chips.push('<span class="chip '+riskClass(state.risk)+'">Riesgo '+riskLabel(state.risk).toLowerCase()+'</span>');
-  if(state.cases) chips.push('<span class="chip">'+state.cases+' casos</span>');
-  el.innerHTML = '<div class="session-story"><div class="name">'+esc(s.title)+'</div><div class="meta">'+chips.join('')+'</div></div>';
+/* Panel del flujo: una sola fuente de verdad, la respuesta del servidor */
+// Todo lo que Valkiria hace sobre una historia, visible desde el inicio (el servidor envía el estado real de cada paso).
+const DEFAULT_STEPS = [['story','HU-003B','Historia de usuario'],['invest','HU-002','Evaluación INVEST'],['story_revision','HU-003A','Nueva versión con sugerencias'],
+  ['approve_story','RT-02','Aprobación de la HU'],['matrix','HU-004','Matriz de pruebas'],['approve_matrix','RT-02','Aprobación de la matriz'],['risk','HU-005','Análisis de riesgo'],
+  ['automation','HU-009','Scripts de automatización'],['pipeline','HU-007','Pipeline de Azure DevOps'],['performance_design','HU-008A','Diseño de prueba de performance'],
+  ['azure_work_item','HU-006','Work Item de Azure DevOps (vista previa)']].map(([key, hu, label]) => ({key, hu, label, state:'pending', ready:false, why:null}));
+const STEP_STATE = { done: 'Hecho', action: 'Requiere tu decisión', stale: 'Desactualizado', failed: 'Falló', skipped: 'No aplica', pending: '' };
+function renderFlow(){
+  const f = state.flow, el = document.getElementById('session');
+  if(!f || !f.story){ el.innerHTML = '<p class="session-empty">Aún no hay una historia en curso. Describe un requerimiento para comenzar.</p>'; }
+  else {
+    const s = f.story;
+    const chips = ['<span class="chip">v'+s.version+'</span>', s.approved ? '<span class="chip ok">Aprobada</span>' : '<span class="chip warn">Borrador</span>'];
+    if(s.assumptions?.length && !s.approved) chips.push('<span class="chip warn">'+s.assumptions.length+' supuesto(s)</span>');
+    el.innerHTML = '<div class="session-story"><div class="name">'+esc(s.title)+'</div><div class="meta">'+chips.join('')+'</div>'+
+      (s.versions.length > 1 ? '<div class="versions">'+s.versions.map(v => 'v'+v.version+' · '+esc(({story:'IA desde el requerimiento', story_revision:'sugerencias INVEST', ai_edit:'IA con tu instrucción', manual_edit:'edición manual'})[v.produced_by] || v.produced_by)).join('<br>')+'</div>' : '')+'</div>';
+  }
+  const next = (f?.next || [])[0];
+  const steps = f?.steps || DEFAULT_STEPS;
+  document.getElementById('steps').innerHTML = steps.map(st => {
+    const isNext = next && ((next.goal && next.goal === st.key) || (next.type === 'approve' && ('approve_'+next.artifact) === st.key) || (next.type === 'decide_suggestions' && st.key === 'story_revision'));
+    const cls = (isNext && st.state !== 'done') ? 'next' : st.state;
+    const sub = st.state === 'done' && st.version ? 'v'+st.version : (STEP_STATE[st.state] || (st.ready ? '' : (st.why || '')));
+    const action = (f?.next || []).find(a => (a.goal === st.key) || (a.type === 'approve' && 'approve_'+a.artifact === st.key) || (a.type === 'decide_suggestions' && st.key === 'story_revision'));
+    const btn = action ? '<button class="btn step-btn" data-i="'+(f.next.indexOf(action))+'">'+esc(action.label)+'</button>' : '';
+    return '<li class="'+cls+'"><span class="state"></span><div><span>'+esc(st.label)+'</span>'+(sub ? '<span class="sub">'+esc(sub)+'</span>' : '')+btn+'</div><span class="hu">'+esc(st.hu)+'</span></li>';
+  }).join('');
+  document.querySelectorAll('#steps .step-btn').forEach(b => b.onclick = () => runSuggested(state.flow.next[+b.dataset.i]));
 }
 
 function addTurn(role, html){
@@ -253,7 +290,7 @@ function addTurn(role, html){
   chat.appendChild(t); scroll(); return t;
 }
 function addWorking(text){ return addTurn('assistant', '<div class="working"><span class="spinner"></span>'+esc(text)+'</div>'); }
-function setBusy(b){ state.busy = b; sendBtn.disabled = b; document.querySelectorAll('.doc-actions .btn, .tool .btn').forEach(x => x.disabled = b); }
+function setBusy(b){ state.busy = b; sendBtn.disabled = b; document.querySelectorAll('.btn').forEach(x => { if(!x.closest('header')) x.disabled = b; }); }
 
 async function api(path, body){
   const r = await fetch(API+path, { method:'POST', headers:{'Content-Type':'application/json','X-Actor':ACTOR}, body: body ? JSON.stringify(body) : undefined });
@@ -271,65 +308,100 @@ function downloadBase64(filename, mediaType, content){
   const link = document.createElement('a'); link.href = url; link.download = filename; link.click();
   URL.revokeObjectURL(url);
 }
-async function exportCases(){
-  if(!state.testCases.length){ addTurn('assistant', '<div class="notice error">Primero genera la matriz de pruebas.</div>'); return; }
-  try {
-    const artifact = await api('/v1/test-cases/export', {story_id:state.story?.id || '', cases:state.testCases});
-    downloadBase64(artifact.filename, artifact.media_type, artifact.content_base64);
-  } catch(e){ addTurn('assistant', '<div class="notice error">'+esc(e.message)+'</div>'); }
-}
 
-/* Conversación: cada turno viaja con el historial reciente y la historia vigente */
+/* Conversación: todo pasa por el conductor (/v1/chat), que sabe en qué paso va el flujo */
 async function send(text){
   const msg = (text ?? input.value).trim(); if(!msg || state.busy) return;
   input.value = ''; autosize();
   addTurn('user', esc(msg));
-  await converse(msg);
+  await exchange({ message: msg });
 }
-async function converse(msg){
+async function act(action, label){
+  if(state.busy) return;
+  addTurn('user', esc(label || action.label || 'Continuar'));
+  await exchange({ action });
+}
+function runSuggested(a){
+  if(a.type === 'say'){ input.focus(); return; }
+  if(a.type === 'decide_suggestions' || a.type === 'input' || (a.type === 'approve' && a.confirm_assumptions?.length)){
+    const t = addTurn('assistant', '<p>'+esc(a.type === 'input' ? 'Necesito estos datos para continuar:' : a.type === 'approve' ? 'Antes de aprobar, confirma los supuestos del borrador:' : 'Decide qué sugerencias INVEST aplicar:')+'</p>'+actionForm(a));
+    bindForms(t); return;
+  }
+  act(a);
+}
+const WORKING = { run: 'Trabajando en el siguiente paso…', approve: 'Registrando la aprobación…', decide_suggestions: 'Aplicando las sugerencias y generando la nueva versión…', edit_story: 'Generando la nueva versión de la historia…', choose_split: 'Redactando la historia…' };
+async function exchange(body){
   setBusy(true);
-  const working = addWorking(state.story ? 'Revisando tu mensaje con la historia actual en contexto…' : 'Analizando el requerimiento…');
-  renderPipeline(['intake','grounding','generation']);
+  const working = addWorking((body.action && WORKING[body.action.type]) || (state.flow?.story ? 'Revisando tu mensaje con el flujo en contexto…' : 'Analizando el requerimiento…'));
   try {
-    const d = await api('/v1/chat', { message: msg, history: state.history.slice(-10), story_id: state.story?.id || null, session_id: state.sessionId });
-    state.done.add('intake'); state.done.add('grounding');
+    const d = await api('/v1/chat', { ...body, session_id: state.sessionId });
     if(d.session_id) state.sessionId = d.session_id;
-    let html = '<p class="reply">'+esc(d.reply)+'</p>';
-    if(d.assistant) html += assistantTrace(d.assistant);
-    if(d.memory?.recalled?.length) html += '<div class="suggest">Consideré '+d.memory.recalled.length+' recuerdo(s) validados del equipo.</div>';
-    if(d.story){
-      state.done.add('generation');
-      if(d.changes || (state.story && state.story.id !== d.story.id)){ state.invest = null; state.risk = null; state.cases = null; state.testCases = []; }
-      state.story = d.story;
-      html += storyDoc(d.story, d.changes);
+    if(d.flow) state.flow = d.flow;
+    working.querySelector('.body').innerHTML = renderReply(d);
+    bindForms(working);
+    if(d.download) downloadBase64(d.download.filename, d.download.media_type, d.download.content_base64);
+    if(d.intent === 'error') working.querySelector('[data-retry]')?.addEventListener('click', () => { if(!state.busy) exchange(body); });
+  } catch(e){ showError(working, e.message, () => exchange(body)); }
+  finally { setBusy(false); renderFlow(); scroll(); input.focus(); }
+}
+
+function renderReply(d){
+  let h = '<p class="reply">'+esc(d.reply)+'</p>';
+  if(d.assistant) h += assistantTrace(d.assistant);
+  if(d.memory?.recalled?.length) h += '<div class="suggest">Consideré '+d.memory.recalled.length+' recuerdo(s) validados del equipo.</div>';
+  if(d.artifact) h += renderArtifact(d.artifact, d.changes);
+  if(d.intent === 'error') h += '<div class="doc-actions"><button class="btn" data-retry="1">'+icon('refresh')+'Intentar de nuevo</button></div>';
+  const actions = (d.actions || []).filter(a => a.type !== 'say');
+  if(actions.length) h += '<div class="doc-actions" style="border:none;background:none;padding:10px 0 0">'+actions.map((a, i) => '<button class="btn" data-action="'+i+'">'+icon(a.type === 'approve' ? 'check-circle' : 'arrow-right')+esc(a.label)+'</button>').join('')+'</div>';
+  if(d.resume) h += '<div class="resume">'+esc(d.resume)+'</div>';
+  lastActions = actions;
+  return h;
+}
+let lastActions = [];
+function bindForms(root){
+  root.querySelectorAll('[data-action]').forEach(b => { const a = lastActions[+b.dataset.action]; b.onclick = () => runSuggested(a); });
+  root.querySelectorAll('form[data-form]').forEach(f => f.onsubmit = e => {
+    e.preventDefault(); const a = JSON.parse(f.dataset.form);
+    if(a.type === 'decide_suggestions'){
+      const decisions = {}; f.querySelectorAll('input[type=checkbox]').forEach(c => decisions[c.name] = c.checked ? 'approved' : 'rejected');
+      act({type:'decide_suggestions', decisions}, 'Aplica las sugerencias marcadas.');
+    } else if(a.type === 'input'){
+      const params = {}; f.querySelectorAll('input').forEach(i => { if(i.value.trim()) params[i.name] = i.type === 'number' ? +i.value : i.value.trim(); });
+      act({type:'input', goal:a.goal, params}, a.label+' con los datos indicados.');
+    } else if(a.type === 'approve'){
+      if(!f.querySelector('input[type=checkbox]').checked){ f.querySelector('.suggest').textContent = 'Marca la confirmación de los supuestos para aprobar.'; return; }
+      act({type:'approve', artifact:a.artifact, assumptions_confirmed:true}, 'Confirmo los supuestos y apruebo la HU.');
     }
-    if(d.assumptions?.length) html += '<div class="notice"><strong>Supuestos por confirmar</strong> (confírmalos o corrígelos antes de aprobar la historia)<ul>'+d.assumptions.map(a => '<li>'+esc(a)+'</li>').join('')+'</ul></div>';
-    if(d.split?.length) html += '<div class="doc-actions split">'+d.split.map((p, i) => '<button class="btn" data-split="'+i+'">'+icon('file')+'Redactar: '+esc(p.title)+'</button>').join('')+'</div>';
-    if(d.intent === 'error') html += '<div class="doc-actions"><button class="btn" data-retry="1">'+icon('check-circle')+'Intentar de nuevo</button></div>';
-    working.querySelector('.body').innerHTML = html;
-    bindDocActions(working);
-    // HU-003B: el PO elige qué historia de la división se redacta.
-    working.querySelectorAll('[data-split]').forEach(b => b.onclick = () => { const p = d.split[+b.dataset.split]; send('Redacta la historia: '+p.title+(p.description ? '. '+p.description : '')); });
-    working.querySelectorAll('[data-retry]').forEach(b => b.onclick = () => { if(!state.busy) converse(msg); });
-    // Un error no entra al historial: al reintentar, la conversación sigue como si no hubiera pasado.
-    if(d.intent !== 'error') state.history.push({role:'user', content: msg}, {role:'assistant', content: d.reply});
-  } catch(e){ showError(working, e.message, () => converse(msg)); }
-  finally { setBusy(false); renderPipeline(); renderSession(); scroll(); input.focus(); }
+  });
+}
+function actionForm(a){
+  const data = esc(JSON.stringify(a));
+  if(a.type === 'decide_suggestions') return '<form class="form" data-form="'+data+'">'+a.suggestions.map(s => '<label class="row"><input type="checkbox" name="'+esc(s.name)+'" checked><span><strong>'+esc(s.name)+'</strong> ('+esc(s.status)+'): '+esc(s.suggestion)+'</span></label>').join('')+'<div><button class="btn" type="submit">'+icon('check-circle')+'Aplicar decisiones</button></div></form>';
+  if(a.type === 'input') return '<form class="form" data-form="'+data+'">'+a.params.map(p => '<label>'+esc(p.question)+'<input name="'+esc(p.name)+'" type="'+(/users|seconds|_ms/.test(p.name)?'number':'text')+'" required></label>').join('')+'<div><button class="btn" type="submit">'+icon('arrow-right')+'Continuar</button></div></form>';
+  return '<form class="form" data-form="'+data+'"><ul class="rules">'+a.confirm_assumptions.map(x => '<li>'+esc(x)+'</li>').join('')+'</ul><label class="row"><input type="checkbox"><span>Confirmo que los supuestos son correctos.</span></label><div class="suggest"></div><div><button class="btn" type="submit">'+icon('check-circle')+'Aprobar la HU</button> <button class="btn" type="button" onclick="act({type:\'edit_story\', instruction:\'Corrige los supuestos de la historia\'}, \'Corrige los supuestos.\')">Corregir un supuesto</button></div></form>';
 }
 
 /* Peticiones fuera del flujo: qué herramientas usó el asistente y cómo llegó a la respuesta. */
 function assistantTrace(a){
   let h = '';
   if(a.tools_used?.length) h += '<div class="chips" style="margin-top:8px">'+a.tools_used.map(t => '<span class="chip ok">'+esc(t)+'</span>').join('')+'</div>';
-  else if(a.status === 'answered') h += '<div class="chips" style="margin-top:8px"><span class="chip warn">Sin verificar con herramientas</span></div>';
-  if(a.status === 'unsupported') h += '<div class="notice"><strong>Fuera de mis capacidades actuales.</strong> Arriba te indico lo que sí puedo hacer.</div>';
+  else if(a.status === 'answered' && a.mode !== 'policy') h += '<div class="chips" style="margin-top:8px"><span class="chip warn">Sin verificar con herramientas</span></div>';
   const steps = (a.steps || []).filter(s => s.tool || s.reason);
   if(steps.length) h += '<details class="reasoning"><summary>Cómo lo resolví ('+steps.length+' paso'+(steps.length===1?'':'s')+')</summary><ol>'+
     steps.map(s => '<li>'+(s.reason ? esc(s.reason)+' ' : '')+(s.tool ? '<code>'+esc(s.tool)+'</code> ' : '')+(s.error ? '<span class="chip bad">'+esc(s.error)+'</span>' : s.observation ? '<span class="chip ok">ok</span>' : '')+'</li>').join('')+'</ol></details>';
   return h;
 }
 
-function storyDoc(s, changes){
+/* Artefactos del flujo */
+function renderArtifact(a, changes){
+  const r = { story: storyDoc, invest: renderInvest, matrix: renderMatrix, risk: renderRisk, automation: renderAutomation, pipeline: renderPipeline,
+              performance_design: renderPerformance, azure_work_item: renderWorkItem }[a.kind];
+  return r ? r(a, changes) : '';
+}
+function head(kind, iconName, chips){ return '<div class="doc"><div class="doc-head">'+icon(iconName)+'<span class="kind">'+kind+'</span><div class="chips">'+chips.join('')+'</div></div>'; }
+function statusChip(a){ return a.approved ? '<span class="chip ok">Aprobado</span>' : '<span class="chip">Borrador</span>'; }
+function storyDoc(a, changes){
+  const s = a.data;
   let changeNote = '';
   if(changes){
     const parts = [];
@@ -339,113 +411,70 @@ function storyDoc(s, changes){
     if(changes.rules_changed) parts.push('reglas de negocio ajustadas');
     changeNote = '<div class="suggest" style="margin-top:8px">Cambios respecto a v'+changes.from_version+': '+esc(parts.join(', ') || 'ajustes menores')+'.</div>';
   }
-  let h = '<div class="doc"><div class="doc-head">'+icon('file')+'<span class="kind">Historia de usuario</span><div class="chips"><span class="chip">v'+s.version+'</span><span class="chip">Borrador</span></div></div><div class="doc-body">';
+  let h = head('Historia de usuario', 'file', ['<span class="chip">v'+a.version+'</span>', statusChip(a)])+'<div class="doc-body">';
   h += '<h4>'+esc(s.title)+'</h4><div class="desc">'+esc(s.description)+'</div>'+changeNote;
   h += '<div class="doc-section"><div class="label">Criterios de aceptación</div><ul class="criteria">'+s.acceptance_criteria.map(c => '<li><span class="id">'+esc(c.id)+'</span><span>'+esc(c.text)+'</span></li>').join('')+'</ul></div>';
   if(s.business_rules?.length) h += '<div class="doc-section"><div class="label">Reglas de negocio</div><ul class="rules">'+s.business_rules.map(r => '<li>'+esc(r)+'</li>').join('')+'</ul></div>';
-  h += '</div><div class="doc-actions" data-story="'+esc(s.id)+'" data-version="'+s.version+'">'+
-       '<button class="btn" data-act="invest">'+icon('check-circle')+'Evaluar INVEST</button>'+
-       '<button class="btn" data-act="test-matrix">'+icon('grid')+'Generar matriz de pruebas</button>'+
-       '<button class="btn" data-act="risk">'+icon('shield')+'Evaluar riesgo</button></div></div>';
-  return h;
+  if(a.assumptions?.length) h += '<div class="notice"><strong>Supuestos por confirmar</strong> antes de aprobar (HU-003B)<ul>'+a.assumptions.map(x => '<li>'+esc(x)+'</li>').join('')+'</ul></div>';
+  return h+'</div></div>';
 }
-function bindDocActions(root){ root.querySelectorAll('.doc-actions .btn').forEach(b => b.onclick = () => runAction(b.dataset.act, b.closest('.doc-actions'))); }
-
-/* Acciones sobre la historia */
-const ACTIONS = {
-  'invest': { ask: 'Evalúa la historia con INVEST.', working: 'Evaluando cada criterio INVEST…', render: renderInvest },
-  'test-matrix': { ask: 'Genera la matriz de pruebas.', working: 'Diseñando casos positivos, negativos y de borde por criterio…', render: renderMatrix },
-  'risk': { ask: 'Evalúa el riesgo de la historia.', working: 'Analizando complejidad, dependencias y criticidad…', render: renderRisk },
-};
-async function runAction(act, bar, retrying){
-  if(state.busy) return;
-  const a = ACTIONS[act], storyId = bar.dataset.story, version = +bar.dataset.version;
-  const current = state.story && state.story.id === storyId && state.story.version === version;
-  if(!retrying) addTurn('user', esc(a.ask) + (current ? '' : ' <span class="suggest">(versión anterior, v'+version+')</span>'));
-  setBusy(true); renderPipeline(['evaluation']);
-  const working = addWorking(a.working);
-  try {
-    const d = await api('/v1/stories/'+encodeURIComponent(storyId)+'/'+act);
-    state.done.add('evaluation');
-    const out = a.render(d, current);
-    working.querySelector('.body').innerHTML = out.html;
-    state.history.push({role:'user', content: a.ask}, {role:'assistant', content: out.summary});
-  } catch(e){ showError(working, e.message, () => runAction(act, bar, true)); }
-  finally { setBusy(false); renderPipeline(); renderSession(); scroll(); }
-}
-
 const STATUS = { cumple: ['Cumple','ok'], parcial: ['Parcial','warn'], no_cumple: ['No cumple','bad'] };
-function renderInvest(d, current){
-  const rows = d.criteria || [];
-  const ok = rows.filter(c => c.status === 'cumple').length, weak = rows.filter(c => c.status !== 'cumple');
-  if(current) state.invest = { ok, total: rows.length };
-  const summary = ok === rows.length ? 'La historia cumple los '+rows.length+' criterios INVEST; está lista para refinarse con el equipo.'
-    : ok+' de '+rows.length+' criterios INVEST se cumplen. Conviene atender '+weak.map(c => c.name).join(', ')+' antes de comprometerla en un sprint.';
-  let h = '<p>'+esc(summary)+'</p><div class="doc"><div class="doc-head">'+icon('check-circle')+'<span class="kind">Evaluación INVEST</span><div class="chips"><span class="chip '+(ok===rows.length?'ok':'warn')+'">'+ok+'/'+rows.length+'</span></div></div><div class="tbl-wrap"><table class="grid"><thead><tr><th>Criterio</th><th>Estado</th><th>Justificación</th></tr></thead><tbody>';
+function renderInvest(a){
+  const rows = a.data.criteria || [], ok = rows.filter(c => c.status === 'cumple').length;
+  let h = head('Evaluación INVEST · HU v'+a.data.story_version, 'check-circle', ['<span class="chip '+(ok===rows.length?'ok':'warn')+'">'+ok+'/'+rows.length+'</span>', statusChip(a)])+'<div class="tbl-wrap"><table class="grid"><thead><tr><th>Criterio</th><th>Estado</th><th>Justificación</th></tr></thead><tbody>';
   h += rows.map(c => { const [l,k] = STATUS[c.status] || [c.status,'warn']; return '<tr><td>'+esc(c.name)+'</td><td><span class="chip '+k+'">'+esc(l)+'</span></td><td>'+esc(c.justification)+(c.suggestion?'<div class="suggest">Sugerencia: '+esc(c.suggestion)+'</div>':'')+'</td></tr>'; }).join('');
-  h += '</tbody></table></div></div>';
-  h += weak.length ? '<p class="follow">Si quieres, dime qué ajustar y actualizo la historia; por ejemplo: “aplica la sugerencia de '+esc(weak[0].name)+'”.</p>'
-                   : '<p class="follow">Podemos seguir con la matriz de pruebas o con el análisis de riesgo.</p>';
-  return { html: h, summary };
+  return h+'</tbody></table></div></div>';
 }
 const TYPE = { positive: 'Positivo', negative: 'Negativo', edge: 'Borde' }, PRIO = { high: 'Alta', medium: 'Media', low: 'Baja' };
-function renderMatrix(d, current){
-  const cases = d.cases || [];
-  if(current){ state.cases = cases.length; state.testCases = cases; }
-  const count = t => cases.filter(c => c.type === t).length;
-  const covered = new Set(cases.map(c => c.criterion_id).filter(Boolean)).size, total = state.story?.acceptance_criteria.length || covered;
-  const summary = 'Diseñé '+cases.length+' casos: '+count('positive')+' positivos, '+count('negative')+' negativos y '+count('edge')+' de borde, cubriendo '+Math.min(covered,total)+' de '+total+' criterios de aceptación.';
-  let h = '<p>'+esc(summary)+'</p><div class="doc"><div class="doc-head">'+icon('grid')+'<span class="kind">Matriz de pruebas</span><div class="chips"><span class="chip">'+cases.length+' casos</span></div></div><div class="tbl-wrap"><table class="grid"><thead><tr><th>ID</th><th>Criterio</th><th>Tipo</th><th>Prioridad</th><th>Escenario</th><th>Resultado esperado</th></tr></thead><tbody>';
+function renderMatrix(a){
+  const cases = a.data.cases || [];
+  let h = head('Matriz de pruebas · HU v'+a.data.story_version, 'grid', ['<span class="chip">'+cases.length+' casos</span>', statusChip(a)])+'<div class="tbl-wrap"><table class="grid"><thead><tr><th>ID</th><th>Criterio</th><th>Tipo</th><th>Prioridad</th><th>Escenario</th><th>Resultado esperado</th></tr></thead><tbody>';
   h += cases.map(c => '<tr><td class="mono">'+esc(c.id)+'</td><td class="mono">'+esc(c.criterion_id)+'</td><td>'+esc(TYPE[c.type]||c.type)+'</td><td>'+esc(PRIO[c.priority]||c.priority)+'</td><td>'+esc(c.scenario)+'</td><td>'+esc(c.expected_result)+'</td></tr>').join('');
-  h += '</tbody></table></div></div><p class="follow">Con la matriz lista, el siguiente paso es generar los scripts por lotes desde el panel de herramientas.</p>';
-  return { html: h, summary };
+  return h+'</tbody></table></div>'+(a.warnings?.length ? '<div class="doc-body"><div class="suggest">'+a.warnings.map(esc).join('<br>')+'</div></div>' : '')+'</div>';
 }
 function riskLabel(l){ return ({low:'Bajo',medium:'Medio',high:'Alto'})[l] || l; }
 function riskClass(l){ return ({low:'ok',medium:'warn',high:'bad'})[l] || 'warn'; }
-function renderRisk(d, current){
-  if(current) state.risk = d.level;
-  const summary = 'Clasifico el riesgo como '+riskLabel(d.level).toLowerCase()+'. '+(d.level==='high'?'Recomiendo priorizar estas pruebas en el primer ciclo.':'No bloquea el avance de QA, pero conviene aplicar la mitigación propuesta.');
-  const h = '<p>'+esc(summary)+'</p><div class="doc"><div class="doc-head">'+icon('shield')+'<span class="kind">Análisis de riesgo</span><div class="chips"><span class="chip '+riskClass(d.level)+'">'+esc(riskLabel(d.level))+'</span></div></div><div class="doc-body">'+
+function renderRisk(a){
+  const d = a.data;
+  return head('Análisis de riesgo', 'shield', ['<span class="chip '+riskClass(d.level)+'">'+esc(riskLabel(d.level))+'</span>'])+'<div class="doc-body">'+
     (d.score_total ? '<div class="label">Puntuación ('+d.score_total+' de 15)</div><div class="chips" style="margin:4px 0 8px">'+Object.entries(d.scores||{}).map(([k,v]) => '<span class="chip">'+esc(k)+': '+v+'/5</span>').join('')+'</div>' : '')+
     '<div class="label">Justificación</div><div class="desc" style="margin-top:0">'+esc(d.justification)+'</div>'+
-    '<div class="doc-section"><div class="label">Mitigación</div><div class="desc" style="margin-top:0">'+esc(d.mitigation)+'</div></div></div></div>';
-  return { html: h, summary };
+    '<div class="doc-section"><div class="label">Mitigación</div><div class="desc" style="margin-top:0">'+esc(d.mitigation)+'</div></div>'+
+    (a.warnings?.length ? '<div class="suggest" style="margin-top:10px">'+a.warnings.map(esc).join('<br>')+'</div>' : '')+'</div></div>';
+}
+function renderAutomation(a){
+  const batches = a.data.batches || [];
+  return head('Scripts de automatización', 'flask', ['<span class="chip">'+batches.length+' lote(s)</span>', '<span class="chip ok">Solo PR</span>'])+'<div class="doc-body">'+
+    batches.map((b, i) => '<div class="label">Lote '+(i+1)+' · '+esc(b.framework||'')+' · '+b.case_ids.length+' casos</div>'+Object.keys(b.scripts||{}).map(f => '<div class="mono" style="color:var(--muted-2);line-height:1.8">'+esc(f)+'</div>').join('')).join('<div style="height:10px"></div>')+'</div></div>';
+}
+function renderPipeline(a){ return head('Pipeline de Azure DevOps', 'refresh', ['<span class="chip">YAML</span>', '<span class="chip ok">Solo PR</span>'])+'<pre class="code">'+esc(a.data.yaml)+'</pre></div>'; }
+function renderPerformance(a){
+  const d = a.data;
+  return head('Diseño de prueba de performance', 'bar-chart', ['<span class="chip">'+esc(d.tool)+'</span>', '<span class="chip">No ejecutada</span>'])+'<div class="doc-body"><div class="chips">'+
+    ['Tipo: '+d.scenario_type, d.users+' usuarios', d.duration_seconds+' s', 'SLA p95 '+d.target_sla_ms+' ms', 'Azure Load Testing'].map(x => '<span class="chip">'+esc(x)+'</span>').join('')+'</div></div></div>';
+}
+function renderWorkItem(a){
+  const f = a.data.fields || {};
+  return head('Work Item · vista previa', 'file', ['<span class="chip">'+esc(a.data.project)+'</span>', statusChip(a)])+'<div class="doc-body">'+
+    Object.entries(f).map(([k,v]) => '<div class="label" style="margin-top:8px">'+esc(k)+'</div><div class="desc" style="margin-top:0">'+esc(String(v).replace(/<[^>]+>/g,' '))+'</div>').join('')+'</div></div>';
 }
 
 /* Herramientas HU-010 / HU-011 */
-async function generateAutomationBatch(retrying){
-  if(state.busy) return;
-  if(retrying !== true) addTurn('user', 'Genera un lote demo de scripts Playwright.');
-  setBusy(true); renderPipeline(['automation']);
-  const working = addWorking('Generando scripts con Page Object Model y trazabilidad por caso…');
-  const cases = [{id:'TC-DEMO-001',scenario:'El usuario inicia sesión con credenciales válidas'},{id:'TC-DEMO-002',scenario:'El sistema rechaza credenciales inválidas'},{id:'TC-DEMO-003',scenario:'La sesión expira por inactividad'}];
-  try {
-    const d = await api('/v1/automation/batches/generate', {cases, framework:'playwright', platform:'web', repository:'ABRAHAMCIMAT/valkiria-qa-multiagent', base_branch:'main', matrix_status:'draft'});
-    state.done.add('automation');
-    const files = Object.keys(d.scripts || {});
-    working.querySelector('.body').innerHTML = '<p>Generé un lote de '+d.case_ids.length+' scripts Playwright con patrón '+esc(d.pattern||'page-object-model')+' y datos externalizados. La entrega queda como Pull Request contra <span class="mono">'+esc(d.base_branch)+'</span>; no se hace commit directo.</p>'+
-      '<div class="doc"><div class="doc-head">'+icon('flask')+'<span class="kind">Lote de automatización</span><div class="chips"><span class="chip">Borrador</span><span class="chip ok">PR obligatorio</span></div></div><div class="tbl-wrap"><table class="grid"><thead><tr><th>Caso</th><th>Escenario</th></tr></thead><tbody>'+
-      cases.map(c => '<tr><td class="mono">'+esc(c.id)+'</td><td>'+esc(c.scenario)+'</td></tr>').join('')+'</tbody></table></div>'+
-      (files.length?'<div class="doc-body" style="border-top:1px solid var(--border-soft)"><div class="label">Archivos</div>'+files.map(f => '<div class="mono" style="color:var(--muted-2);line-height:1.8">'+esc(f)+'</div>').join('')+'</div>':'')+'</div>';
-  } catch(e){ showError(working, e.message, () => generateAutomationBatch(true)); }
-  finally { setBusy(false); renderPipeline(); scroll(); }
-}
 async function executeDatabaseDemo(retrying){
   if(state.busy) return;
   const script = 'select order_id, status from sales_orders limit 10';
   if(retrying !== true) addTurn('user', 'Valida la consulta de estados de pedidos en la base sintética.');
-  setBusy(true); renderPipeline(['database']);
+  setBusy(true);
   const working = addWorking('Ejecutando análisis estático y consulta en PostgreSQL sintético…');
   try {
     const d = await api('/v1/database/scripts/execute', {engine:'postgresql', environment:'qa', case_id:'TC-DB-DEMO-001', output_format:'pdf', script});
-    state.done.add('database');
     const rows = d.rows || [], cols = rows.length ? Object.keys(rows[0]) : [], ok = d.status === 'completed';
     working.querySelector('.body').innerHTML = '<p>'+(ok ? 'La consulta pasó el análisis estático como solo lectura y se ejecutó en '+Math.round(d.duration_ms)+' ms sobre el perfil sintético. Devolvió '+rows.length+' registros'+(d.report_generated?' y quedó generado el reporte de evidencia.':'.') : 'La ejecución no se completó ('+esc(d.error||d.status)+').')+'</p>'+
       '<div class="doc"><div class="doc-head">'+icon('database')+'<span class="kind">Validación de base de datos</span><div class="chips"><span class="chip '+(ok?'ok':'bad')+'">'+(ok?'Completada':'Fallida')+'</span></div></div>'+
       '<div class="doc-body" style="border-bottom:1px solid var(--border-soft)"><div class="mono" style="color:var(--muted-2)">'+esc(script)+'</div></div>'+
       (rows.length?'<div class="tbl-wrap"><table class="grid"><thead><tr>'+cols.map(c => '<th>'+esc(c)+'</th>').join('')+'</tr></thead><tbody>'+rows.map(r => '<tr>'+cols.map(c => '<td>'+esc(r[c])+'</td>').join('')+'</tr>').join('')+'</tbody></table></div>':'')+'</div>';
   } catch(e){ showError(working, e.message, () => executeDatabaseDemo(true)); }
-  finally { setBusy(false); renderPipeline(); scroll(); }
+  finally { setBusy(false); scroll(); }
 }
 
 /* Sesión */
@@ -463,7 +492,7 @@ async function checkHealth(){
     if(d.environment) document.getElementById('env-tag').textContent = d.environment.toUpperCase()+(d.mode==='synthetic'?' · Datos sintéticos':'');
   } catch(e){ statusEl.textContent = 'Sin conexión con el servidor'; dotEl.classList.add('off'); }
 }
-renderPipeline(); renderSession(); checkHealth(); input.focus();
+renderFlow(); checkHealth(); input.focus();
 </script>
 </body>
 </html>

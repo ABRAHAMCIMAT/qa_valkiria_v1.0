@@ -154,7 +154,7 @@ async def test_incomplete_llm_matrix_is_repaired_or_completed_deterministically(
     cases = state.artifacts["matrix"].payload["cases"]
     coverage = {(c["criterion_id"], c["type"]) for c in cases}
     assert coverage == {(c, t) for c in ("AC-01", "AC-02") for t in ("positive", "negative", "edge")}
-    assert llm.calls.count("matrix") == 2
+    assert llm.calls.count("matrix") == 3  # una llamada por criterio (2) y una corrección
     assert any("plantilla determinista" in w for w in state.artifacts["matrix"].warnings)
 
 

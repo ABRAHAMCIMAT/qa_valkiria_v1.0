@@ -15,7 +15,7 @@ Ejecutada en macOS con Python 3.12.2 y Docker 29.8.1, con el código ya integrad
 | Docker daemon | `docker info` | Activo (Docker Desktop 29.8.1) |
 | Ruff | `ruff check src tests` | Sin errores |
 | Bandit | `bandit -q -c pyproject.toml -r src` | Sin hallazgos |
-| Unitarias | `pytest -q --ignore=tests/e2e` | 158 aprobadas (aisladas del `.env` local mediante `tests/conftest.py`) |
+| Unitarias | `pytest -q --ignore=tests/e2e` | 174 aprobadas (aisladas del `.env` local mediante `tests/conftest.py`) |
 | E2E sintética | `RUN_SYNTHETIC_E2E=1 pytest -v tests/e2e` | 5 aprobadas contra PostgreSQL 16 (flujo de la app sintética y mutaciones con límite); repetibles |
 | Paquete | `python -m build` | `valkiria-0.5.0-py3-none-any.whl` y `valkiria-0.5.0.tar.gz`; el wheel se instala y arranca en un entorno limpio |
 | Imagen Docker | `docker build -f deploy/docker/Dockerfile .` | 303 MB, usuario `uid=10001`, healthcheck activo |
@@ -63,6 +63,21 @@ Ejecutada en macOS con Python 3.12.2 y Docker 29.8.1, con el código ya integrad
 | Memoria en PostgreSQL real | Persiste tras reiniciar, redacta, deduplica y recupera |
 | Integración en vivo con Llama 3.2 | Chat: pregunta con herramienta, creación de HU y ajuste usando solo la sesión. Flujo: aprendió la HU aprobada y las preferencias del PO, y el siguiente flujo las usó. Una pregunta dentro del flujo se respondió con `estado_flujo`. Orquestador: el seguimiento heredó la intención y la pregunta se resolvió con el agente `assistant` |
 | Batería de 13 peticiones fuera del flujo, 2 corridas | 26 de 26 correctas: 22 con la herramienta o skill adecuada y 4 rechazos honestos; ver [Asistente](asistente.md#validación-con-llama-32-instruct) |
+
+## Conductor de la conversación
+
+- **Pruebas:** 16 en `tests/test_conversation.py`, que cubren el recorrido completo por los 11 pasos y cada regla de decisión (ver [Conductor](conversacion.md#validación)).
+- **Recorrido en vivo con Llama 3.2** (20 turnos, Compose):
+  - "mejora la historia" dos veces generó v2 y v3;
+  - una pregunta de QA y un agradecimiento a mitad del flujo lo retomaron;
+  - un texto con forma de requerimiento generó una aclaración y "ninguna, sigamos" retomó el flujo;
+  - se completaron INVEST, aprobación, matriz (18 casos para 6 criterios, sin tiempos agotados), riesgo, scripts, pipeline, performance y Work Item;
+  - "¿qué sigue?" pidió la aprobación en lugar de aprobar.
+- **Tiempos observados:**
+  - historia, 11 a 21 s;
+  - evaluaciones, 7 a 11 s;
+  - matriz, unos 18 s por criterio;
+  - pasos deterministas (scripts, pipeline, performance, Work Item) y aprobaciones, instantáneos.
 
 ## System prompts v2
 

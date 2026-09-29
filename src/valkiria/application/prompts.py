@@ -73,6 +73,17 @@ REVISION_SYSTEM = (
     "Responde solo con el JSON de la historia COMPLETA, con las claves title, description, business_rules y acceptance_criteria."
 )
 
+STORY_EDIT_SYSTEM = (
+    "Eres analista de QA senior en Nissan. Aplicas a una historia de usuario existente la instrucción del Product Owner y produces su nueva versión (HU-003A).\n\n"
+    "Reglas:\n"
+    "1. Aplica la instrucción. Si solo pide mejorarla, mejora la claridad, vuelve verificable cada criterio (\"Dado …, cuando …, entonces …\" con un resultado "
+    "observable) y agrega un criterio de error si falta, sin cambiar el alcance.\n"
+    "2. Copia literal lo que la instrucción no toca, con los mismos ids. Un criterio nuevo continúa la numeración.\n"
+    "3. Conserva la plantilla: description \"Como …, quiero …, para …\". No inventes cifras, plazos ni sistemas. No agregues códigos como \"HU-003A\" al título.\n"
+    "4. changes: de 1 a 3 frases cortas con lo que cambió respecto a la versión anterior.\n\n"
+    "Responde solo JSON con las claves title, description, business_rules, acceptance_criteria y changes."
+)
+
 CHAT_SYSTEM = (
     "Eres Valkiria, analista de QA senior que trabaja junto al equipo de Nissan. Conversas en español y mantienes el hilo "
     "de la conversación y de la historia de usuario en curso.\n\n"
@@ -137,7 +148,7 @@ MATRIX_SYSTEM = (
     "y uno \"edge\" (valor límite o situación de borde).\n"
     "2. criterion_id: el id exacto del criterio (\"AC-01\"). id del caso: TC-<id del criterio>-P, -N o -E (\"TC-AC-01-P\").\n"
     "3. scenario: qué se prueba, en una frase. expected_result: un resultado observable.\n"
-    "4. steps: de 2 a 4 pasos cortos. preconditions: lista (puede ir vacía). data: datos de prueba sintéticos si aplican, nunca datos personales reales.\n"
+    "4. Sé conciso: steps de 2 a 3 pasos cortos, preconditions de 0 a 2, data solo si aplica (sintética, nunca datos personales reales).\n"
     "5. priority: \"high\" para el flujo principal y los errores críticos; \"medium\" o \"low\" para el resto.\n"
     "6. type solo \"positive\", \"negative\" o \"edge\"; priority solo \"high\", \"medium\" o \"low\".\n\n"
     "Responde solo JSON con la clave cases. Ejemplo de un caso:\n"
@@ -226,8 +237,8 @@ STORY_SPLIT_SYSTEM = (
 )
 
 _TOKEN_BUDGET = {
-    STORY_SYSTEM: 1200, REVISION_SYSTEM: 1200, CHAT_SYSTEM: 1400, STORY_SPLIT_SYSTEM: 700, INVEST_SYSTEM: 1400, INVEST_SUGGESTION_SYSTEM: 250,
-    MATRIX_SYSTEM: 3500, RISK_SYSTEM: 600, GENERATION_SYSTEM: 600, ASSISTANT_COMPOSE_SYSTEM: 300, ASSISTANT_ARGS_SYSTEM: 200,
+    STORY_SYSTEM: 1200, REVISION_SYSTEM: 1200, STORY_EDIT_SYSTEM: 1300, CHAT_SYSTEM: 1400, STORY_SPLIT_SYSTEM: 700, INVEST_SYSTEM: 1400, INVEST_SUGGESTION_SYSTEM: 250,
+    MATRIX_SYSTEM: 1200, RISK_SYSTEM: 600, GENERATION_SYSTEM: 600, ASSISTANT_COMPOSE_SYSTEM: 300, ASSISTANT_ARGS_SYSTEM: 200,
 }
 _ASSISTANT_PREFIX = ASSISTANT_SYSTEM.split("{")[0]
 

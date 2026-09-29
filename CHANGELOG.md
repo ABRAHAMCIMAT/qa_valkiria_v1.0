@@ -2,6 +2,29 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/).
 
+## 2026-09-29 — Conductor de la conversación y flujo completo en la interfaz
+
+### Añadido
+- `src/valkiria/conversation/`: el conductor de la conversación, nuevo agente principal del chat.
+  - Liga cada sesión a un flujo por historia y recuerda en qué paso va.
+  - Decide de forma determinista qué hacer con cada mensaje: acciones, políticas, cortesía, nueva historia explícita, modificar la HU, avanzar el flujo, atender preguntas con prioridad al humano, o preguntar antes de reiniciar.
+- `/v1/chat` acepta acciones (`run`, `input`, `approve`, `reject`, `decide_suggestions`, `edit_story`, `new_story`, `choose_split`, `export_matrix`, `resume`). Responde con `flow` (11 pasos con su estado y versiones), `artifact`, `actions` y `resume`.
+- Motor: `adopt_story` (la HU del chat inicia el flujo) y `revise_story` (toda modificación crea la versión N+1). Nuevo prompt `STORY_EDIT_SYSTEM`.
+- Interfaz con el flujo completo:
+  - panel con los 11 pasos, su estado, el siguiente paso y botones;
+  - historial de versiones;
+  - tarjetas para cada artefacto (HU, INVEST, matriz, riesgo, scripts, pipeline, performance, Work Item);
+  - formularios para decidir sugerencias, aportar datos y confirmar supuestos;
+  - recordatorio del paso en curso.
+- `docs/conversacion.md`; 16 pruebas en `tests/test_conversation.py`.
+
+### Corregido
+- "Mejora la historia" no siempre generaba una versión nueva. Ahora toda modificación crea la versión N+1 con su lista de cambios.
+- Algunas preguntas devolvían el chat al inicio como si se pidiera una historia nueva. Ahora se atienden y se retoma el paso en curso.
+- "Siguiente" o "¿qué sigue?" podían aprobar un artefacto. Ahora piden la confirmación explícita (RT-02).
+- La matriz de una HU con muchos criterios superaba el límite de 60 s. Ahora se genera por criterio y cada llamada cabe en el límite.
+- Las preguntas sobre la HU en curso se responden con el estado real del flujo.
+
 ## 2026-09-29 — System prompts v2: reglas de negocio de las HU y conversación natural
 
 ### Añadido

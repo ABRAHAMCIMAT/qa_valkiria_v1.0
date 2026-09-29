@@ -14,6 +14,7 @@ Incluye un perfil E2E seguro con datos Nissan ficticios, PostgreSQL efímero, ap
 - [Despliegue: configuración, Docker, Compose, CI y Kubernetes](docs/despliegue.md)
 - [Orquestación multiagente](docs/multiagente-orquestacion.md)
 - [Flujo de agentes por historia (dependencias, aprobaciones y reanudación)](docs/flujo-historias.md)
+- [Conductor de la conversación: el flujo completo en el chat](docs/conversacion.md)
 - [Memoria de corto y largo plazo](docs/memoria.md)
 - [Asistente de razonamiento con herramientas (peticiones fuera del flujo)](docs/asistente.md)
 - [System prompts: reglas de negocio, conversación y evaluación](docs/prompts.md)
@@ -73,7 +74,7 @@ La respuesta conserva `request_id`, `trace_id`, plan de agentes, artefactos, dec
 | GET | `/health` | Estado, modo, agentes y políticas activas |
 | GET | `/` | Frontend conversacional (mismo origen que la API) |
 | POST | `/v1/agent/execute` | Orquestación multiagente (acepta `session_id` para seguimientos) |
-| POST | `/v1/chat` | Conversación: construye la HU o responde preguntas con herramientas; mantiene la sesión |
+| POST | `/v1/chat` | Conductor de la conversación: flujo completo de la HU (versiones, INVEST, aprobaciones, matriz, riesgo, scripts, pipeline, performance, Work Item) por mensaje o acción; atiende preguntas y retoma el flujo |
 | POST | `/v1/assistant/ask` | Pregunta o petición fuera del flujo, resuelta con herramientas y skills |
 | GET | `/v1/assistant/capabilities` | Catálogo de herramientas y skills, límites y capacidades no disponibles |
 | GET, DELETE | `/v1/memory/sessions/{id}` | Consultar o borrar la memoria de una sesión |

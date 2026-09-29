@@ -44,6 +44,28 @@ intake → grounding → generation → evaluation → database → automation �
 
 Approval devuelve `waiting_approval` sin publicar. Release prepara preview con `direct_commit=false`; la PR real requiere autorización explícita.
 
+## Conductor de la conversación
+
+El agente principal de la interfaz es el [conductor de la conversación](conversacion.md). Liga cada sesión a un flujo por historia y decide, de forma determinista, qué hacer con cada mensaje:
+- modificar la HU (siempre versión N+1);
+- avanzar un paso respetando dependencias y aprobaciones;
+- atender una pregunta con el asistente y retomar el flujo;
+- conversar;
+- o preguntar antes de reiniciar.
+
+`/v1/agent/execute` sigue disponible para peticiones aisladas.
+
+```text
+Mensaje o acción
+      ↓
+Conductor ── políticas ─────────────────────→ Assistant (rechazo amable) ─┐
+   │      ── cortesía ──────────────────────→ conversación               │
+   │      ── modificar la HU ───────────────→ HU vN+1 (motor de flujo)   ├→ recordatorio del paso en curso
+   │      ── paso del flujo / aprobar ──────→ motor de flujo (HU-002…009)│
+   │      ── pregunta o petición de QA ─────→ Assistant con herramientas ─┘
+   └───── requerimiento con HU en curso ───→ "¿ajusto la actual o empiezo otra?"
+```
+
 ## Memoria y peticiones fuera del flujo
 
 - Con `session_id`, el orquestador carga la memoria de la sesión y los recuerdos validados del equipo en `AgentContext.memory`. Intake hereda la intención de la sesión en un seguimiento; Grounding no bloquea seguimientos cortos; Generation usa la memoria en el prompt. Al terminar se guarda el turno. Ver [Memoria](memoria.md).

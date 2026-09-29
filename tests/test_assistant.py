@@ -322,7 +322,7 @@ def test_chat_routes_open_questions_to_the_assistant_and_keeps_the_session():
     story = api.post("/v1/chat", json={"message": "Consultar vehículos por concesionario", "session_id": body["session_id"]}).json()
     assert story["intent"] == "crear" and story["story"]
     session = api.get(f"/v1/memory/sessions/{body['session_id']}").json()
-    assert len(session["turns"]) == 4 and session["facts"]["story_id"] == story["story"]["id"]
+    assert len(session["turns"]) == 4 and session["facts"]["workflow_id"] == story["flow"]["workflow_id"]
 
 
 def test_workflow_endpoints_answer_out_of_flow_requests_instead_of_forcing_a_story():

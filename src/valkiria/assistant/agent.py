@@ -48,6 +48,8 @@ from valkiria.memory.text import fold, tokens
 from valkiria.providers.openai_compatible import LLMProviderError
 
 DUPLICATE = "Consulta repetida: ya tienes ese resultado."
+_ABOUT_FLOW = re.compile(r"\b(la historia|esta historia|la hu|esta hu|la matriz|los casos|el riesgo|la evaluacion|los scripts|el pipeline|la version|el flujo|"
+                         r"cuantos|cuantas|en que va|como va|que falta|que llevamos|aprobad[ao])\b")
 _REFUSAL = re.compile(r"\b(no (se )?puedo|no se puede|no tengo (la )?(capacidad|informacion|acceso)|no es posible|no cuento con)\b")
 # Hablar de la herramienta o de la observación en vez de responder ("otros que no se muestran en esta observación") no es fiel a los datos.
 _META = re.compile(r"observacion|la herramienta|no se muestra|\{\}|json|argumento")
@@ -140,6 +142,10 @@ class ReasoningAssistant:
         run = _Run(question=question)
         # Pista determinista: las herramientas más afines a la petición orientan a un modelo pequeño.
         hints = self.toolbox.closest(question, limit=3)
+        flow_tool = self.toolbox.get("estado_flujo")
+        if ctx.workflow_id and flow_tool and _ABOUT_FLOW.search(fold(question)) and not is_conceptual(question):
+            # Preguntas sobre la HU en curso ("¿cuántos casos tiene la matriz?"): la fuente es el estado del flujo.
+            hints = [flow_tool] + [t for t in hints if t is not flow_tool][:2]
         glossary = self.toolbox.get("glosario_qa")
         if glossary and is_conceptual(question) and exact_terms(question):
             # Conceptos presentes en el glosario: se consulta primero la fuente verificada, sin depender de que el modelo lo decida.

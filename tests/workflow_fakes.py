@@ -4,7 +4,7 @@ from valkiria.application import prompts
 from valkiria.providers.openai_compatible import LLMProviderError
 
 # El LLM simulado reconoce cada tarea por su prompt de sistema exacto: reescribir un prompt no rompe las pruebas.
-_BY_PROMPT = {prompts.STORY_SPLIT_SYSTEM: "split", prompts.INVEST_SUGGESTION_SYSTEM: "suggestion", prompts.ASSISTANT_ARGS_SYSTEM: "args", prompts.ASSISTANT_COMPOSE_SYSTEM: "compose", prompts.CHAT_SYSTEM: "chat", prompts.REVISION_SYSTEM: "revision",
+_BY_PROMPT = {prompts.STORY_EDIT_SYSTEM: "edit", prompts.STORY_SPLIT_SYSTEM: "split", prompts.INVEST_SUGGESTION_SYSTEM: "suggestion", prompts.ASSISTANT_ARGS_SYSTEM: "args", prompts.ASSISTANT_COMPOSE_SYSTEM: "compose", prompts.CHAT_SYSTEM: "chat", prompts.REVISION_SYSTEM: "revision",
               prompts.STORY_SYSTEM: "story", prompts.INVEST_SYSTEM: "invest", prompts.MATRIX_SYSTEM: "matrix", prompts.RISK_SYSTEM: "risk"}
 _ASSISTANT_PREFIX = prompts.ASSISTANT_SYSTEM.split("{")[0]
 
@@ -43,6 +43,7 @@ class ScriptedLLM:
         self.args_script: list[dict] = []
         self.chat_response: dict | None = None
         self.split_response: dict | None = None
+        self.edit_response: dict | None = None
         self.failures: dict[str, int] = {}
         self.matrix = full_matrix()
         self.story = STORY
@@ -53,6 +54,13 @@ class ScriptedLLM:
         if kind == "args":
             self.calls.append("args")
             return self.args_script.pop(0) if self.args_script else {}
+        if kind == "edit":
+            self.calls.append("edit")
+            self.prompts.append(("edit", user))
+            if self.edit_response is not None:
+                return self.edit_response
+            criteria = [*self.story["acceptance_criteria"], {"id": f"AC-{len(self.story['acceptance_criteria']) + 1:02d}", "text": f"Dado un dato inválido, cuando consulto, entonces veo un error claro ({len(self.calls)})"}]
+            return {**self.story, "acceptance_criteria": criteria, "changes": ["Agregué un criterio de error."]}
         if kind == "split":
             self.calls.append("split")
             return self.split_response or {"split": [{"title": "Consultar mis autos"}, {"title": "Agendar cita de servicio"}, {"title": "Pagar en línea"}]}

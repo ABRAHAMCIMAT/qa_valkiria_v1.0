@@ -29,8 +29,8 @@ from valkiria.application.prompts import token_budget
 from valkiria.application.use_cases import ValkiriaService
 from valkiria.assistant import ReasoningAssistant, build_toolbox, route_message
 from valkiria.assistant.capabilities import capability_summary
-from valkiria.assistant.routing import is_conversational
 from valkiria.assistant.tools import ToolContext
+from valkiria.conversation.controller import ConversationController
 from valkiria.domain.models import UserStory
 from valkiria.infrastructure.execution_memory import (
     InMemoryBatchStore,
@@ -95,7 +95,10 @@ class ChatTurn(BaseModel):
 
 
 class ChatReq(BaseModel):
-    message: str = Field(min_length=1, max_length=20000)
+    # Un mensaje en lenguaje natural o una acción de la interfaz (aprobar, ejecutar un paso, decidir sugerencias…).
+    message: str | None = Field(default=None, max_length=20000)
+    action: dict[str, Any] | None = None
+    workflow_id: str | None = Field(default=None, max_length=64)
     # Opcional: si se omite y hay session_id, el servidor usa el hilo guardado en la memoria de corto plazo.
     history: list[ChatTurn] = Field(default_factory=list, max_length=20)
     story_id: str | None = None
@@ -196,6 +199,8 @@ def create_app(llm=None):
     # Peticiones fuera del flujo programado: razonamiento con herramientas y skills reales de Valkiria.
     assistant = ReasoningAssistant(llm, build_toolbox(service=service, memory=memory, workflows=workflows, synthetic_app_base_url=settings.synthetic_app_base_url))
     workflows.assistant = assistant
+    # Agente principal de la conversación: sabe en qué paso del flujo va cada sesión (docs/conversacion.md).
+    conversation = ConversationController(service=service, workflows=workflows, assistant=assistant, memory=memory)
     orchestrator = MultiAgentOrchestrator(build_default_registry(llm=llm, audit=audit, metrics=metrics, database_executor=database_executor, automation_runner=automation_runner,
                                                                  synthetic_app_base_url=settings.synthetic_app_base_url, assistant=assistant), audit=audit, metrics=metrics, memory=memory)
 
@@ -274,43 +279,23 @@ def create_app(llm=None):
     async def chat(req: ChatReq, request: Request, x_actor: str = Header(default="anonymous")):
         trace_id = request.state.trace_id
         session_id = req.session_id or str(uuid4())
-        session = await memory.session(session_id)
-        # Memoria de corto plazo: sin historial del cliente se usa el hilo guardado, incluida la HU en curso.
-        history = [t.model_dump() for t in req.history] or await memory.short_term.history(session_id)
-        story_id = req.story_id or (session.facts.get("story_id") if session else None)
-        current = await stories.get(story_id) if story_id else None
-        recalled: list = []
+        if not (req.message and req.message.strip()) and not req.action:
+            raise HTTPException(422, "message_or_action_required")
         try:
-            if route_message(req.message) == "assistant" and not is_conversational(req.message):
-                # Pregunta o petición fuera del flujo de HU: se razona con herramientas y se responde con honestidad.
-                extra = f"HU en curso: '{current.title}' v{current.version}: {current.description}" if current else ""
-                answer, recalled = await ask_assistant(req.message, actor=x_actor, namespace=req.namespace, session_id=session_id, trace_id=trace_id, extra=extra)
-                story = answer.outputs.get("story")
-                result = {"intent": "responder" if answer.status == "answered" else "no_puedo", "reply": answer.answer, "assumptions": [], "story": story, "changes": None,
-                          "split": [], "assistant": answer.model_dump(mode="json", exclude={"outputs"})}
-            else:
-                query = req.message + (f" {current.title} {current.description}" if current else "")
-                recalled = await memory.recall(query, task="chat", namespace=req.namespace)
-                # Los turnos antiguos que salieron de la ventana llegan resumidos: el hilo no se pierde en conversaciones largas.
-                earlier = "Antes en esta conversación:\n" + "\n".join(f"- {line}" for line in session.summary[-8:]) if session and session.summary else ""
-                context = "\n\n".join(part for part in (recall_prompt(recalled), earlier) if part)
-                result = await service.converse(req.message, history, current, x_actor, memory=context)
+            return await conversation.handle(session_id=session_id, message=req.message, action=req.action, actor=x_actor, namespace=req.namespace,
+                                             trace_id=trace_id, workflow_id=req.workflow_id)
         except (LLMProviderError, TimeoutError) as exc:
-            # RT-04: error claro con trace_id; la conversación y la HU se conservan y se puede reintentar. La conversación no se rompe.
+            # RT-04: error claro con trace_id; la conversación y el flujo se conservan y se puede reintentar. La conversación no se rompe.
             event(logger, logging.WARNING, "chat_llm_no_disponible", trace_id=trace_id, error=getattr(exc, "code", type(exc).__name__))
-            return {"intent": "error", "reply": ("Disculpa, no pude procesar tu mensaje porque el modelo no respondió a tiempo. Tu conversación y la historia en curso se conservan; "
-                                                 f"¿lo intentamos de nuevo? (Referencia: {trace_id})"), "assumptions": [], "story": None, "changes": None, "split": [],
-                    "retryable": True, "trace_id": trace_id, "session_id": session_id if memory.enabled else None, "memory": {"recalled": []}}
+            reply = ("Disculpa, no pude procesar tu mensaje porque el modelo no respondió a tiempo. Tu conversación y la historia en curso se conservan; "
+                     f"¿lo intentamos de nuevo? (Referencia: {trace_id})")
         # Frontera de la conversación: ningún error interno debe romper el chat ni exponer detalles.
         except Exception as exc:  # noqa: BLE001
             event(logger, logging.ERROR, "chat_error_interno", trace_id=trace_id, error_type=type(exc).__name__)
-            return {"intent": "error", "reply": ("Disculpa, tuve un problema interno al procesar tu mensaje. No se perdió nada de lo que llevamos; "
-                                                 f"¿lo intentamos de nuevo o prefieres reformularlo? (Referencia: {trace_id})"), "assumptions": [], "story": None, "changes": None,
-                    "split": [], "retryable": True, "trace_id": trace_id, "session_id": session_id if memory.enabled else None, "memory": {"recalled": []}}
-        new_story_id = (result.get("story") or {}).get("id") or story_id
-        await memory.add_turn(session_id, "user", req.message)
-        await memory.add_turn(session_id, "assistant", result["reply"], facts={"story_id": str(new_story_id) if new_story_id else None}, intent=result["intent"])
-        return result | {"session_id": session_id if memory.enabled else None, "memory": {"recalled": describe(recalled)}, "trace_id": trace_id}
+            reply = ("Disculpa, tuve un problema interno al procesar tu mensaje. No se perdió nada de lo que llevamos; "
+                     f"¿lo intentamos de nuevo o prefieres reformularlo? (Referencia: {trace_id})")
+        return {"intent": "error", "reply": reply, "retryable": True, "trace_id": trace_id, "session_id": session_id, "actions": [], "flow": None,
+                "story": None, "split": [], "assumptions": [], "changes": None}
 
     @app.post("/v1/assistant/ask")
     async def assistant_ask(req: AssistantReq, request: Request, x_actor: str = Header(default="anonymous")):

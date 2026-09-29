@@ -38,6 +38,9 @@ def _as_list(value) -> list:
 def _normalize_story(data: dict) -> dict:
     """Adapta la salida de LLMs locales al contrato de UserStory (criterios como texto, campos extra)."""
     story = {k: v for k, v in data.items() if k in {"title", "description", "business_rules", "acceptance_criteria"}}
+    # El modelo a veces anota la HU del proceso en el título ("… (HU-003A)"): no es parte del título.
+    if isinstance(story.get("title"), str):
+        story["title"] = re.sub(r"\s*[\(\[]\s*(HU|RT)-\d+[A-Z]?\s*[\)\]]", "", story["title"]).strip()
     story["business_rules"] = [_text(r) for r in _as_list(story.get("business_rules")) if _text(r).strip()]
     criteria = []
     for i, c in enumerate(_as_list(story.get("acceptance_criteria")), start=1):
@@ -131,9 +134,10 @@ def looks_broad(message: str) -> bool:
     return len(clauses) >= 3 and len(message.split()) >= 10
 
 
-def matrix_user_prompt(story: UserStory) -> str:
+def matrix_user_prompt(story: UserStory, only: str | None = None) -> str:
     """La historia más la lista exacta de casos que exige HU-004: un modelo pequeño cumple mejor una lista que una regla que debe calcular."""
-    slots = [f"TC-{c.id}-{suffix} ({c.id}, {kind})" for c in story.acceptance_criteria for suffix, kind in (("P", "positive"), ("N", "negative"), ("E", "edge"))]
+    slots = [f"TC-{c.id}-{suffix} ({c.id}, {kind})" for c in story.acceptance_criteria if only in (None, c.id)
+             for suffix, kind in (("P", "positive"), ("N", "negative"), ("E", "edge"))]
     return (story.model_dump_json(include={"title", "description", "business_rules", "acceptance_criteria"})
             + f"\n\nGenera exactamente estos {len(slots)} casos, uno por línea de esta lista:\n" + "\n".join(slots))
 
@@ -318,9 +322,20 @@ class ValkiriaService:
         await self.ops.start(ctx, "generate_matrix", ArtifactType.TEST_MATRIX)
         try:
             await self._ground(ctx)
-            data = await self.llm.generate_json(system=MATRIX_SYSTEM, user=with_memory(matrix_user_prompt(story), memory), schema=TestMatrix.model_json_schema())
-            data = _normalize_matrix(data)
-            data.update(story_id=story.id)
+            # Por criterio: 3 casos por llamada caben holgados en el tiempo límite (RT-04) y el modelo se enfoca en un solo criterio.
+            cases: list[dict] = []
+            for criterion in story.acceptance_criteria:
+                data = await self.llm.generate_json(system=MATRIX_SYSTEM, user=with_memory(matrix_user_prompt(story, only=criterion.id), memory),
+                                                    schema=TestMatrix.model_json_schema())
+                returned = _normalize_matrix(data)["cases"]
+                # Se pidió un solo criterio: si el modelo no lo marcó bien, sus casos se asignan a ese criterio.
+                cases += [c for c in returned if c.get("criterion_id") == criterion.id] or [{**c, "criterion_id": criterion.id} for c in returned[:3]]
+            seen: set[str] = set()
+            for case in cases:
+                while case["id"] in seen:
+                    case["id"] = f"{case['id']}-{case['criterion_id']}"
+                seen.add(case["id"])
+            data = {"cases": cases[:30], "story_id": story.id}
             result = TestMatrix.model_validate(data)
             await self.ops.record(ctx, Phase.GENERATION, "test_matrix", "draft_created", ArtifactType.TEST_MATRIX, str(result.id))
             await self._skip_human_release_gates(ctx, "el caso de uso solo genera una matriz en borrador")
