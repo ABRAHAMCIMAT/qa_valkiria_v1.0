@@ -80,6 +80,8 @@ services:
       VALKIRIA_LLM_BASE_URL: ${VALKIRIA_DOCKER_LLM_BASE_URL:-http://host.docker.internal:11434/v1}
       VALKIRIA_ALLOWED_ORIGINS: http://localhost:8000,http://localhost:3000
       VALKIRIA_AUTOMATION_EXECUTE: "true"
+      # Token exclusivo del entorno local para probar el envío de resultados del pipeline (HU-010).
+      VALKIRIA_PIPELINE_CALLBACK_TOKEN: ${VALKIRIA_PIPELINE_CALLBACK_TOKEN:-valkiria_local_pipeline_only}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:

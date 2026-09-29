@@ -261,7 +261,7 @@ function scroll(){ thread.scrollTop = thread.scrollHeight; }
 // Todo lo que Valkiria hace sobre una historia, visible desde el inicio (el servidor envía el estado real de cada paso).
 const DEFAULT_STEPS = [['story','HU-003B','Historia de usuario'],['invest','HU-002','Evaluación INVEST'],['story_revision','HU-003A','Nueva versión con sugerencias'],
   ['approve_story','RT-02','Aprobación de la HU'],['matrix','HU-004','Matriz de pruebas'],['approve_matrix','RT-02','Aprobación de la matriz'],['risk','HU-005','Análisis de riesgo'],
-  ['automation','HU-009','Scripts de automatización'],['data_validation','HU-011','Validación de datos (sintética)'],['execution','HU-010','Ejecución de scripts y datos (sintética)'],['pipeline','HU-007','Pipeline de Azure DevOps'],['performance_design','HU-008A','Diseño de prueba de performance'],
+  ['automation','HU-009','Scripts de automatización'],['data_validation','HU-011','Validación de datos (sintética)'],['execution','HU-010','Ejecución de scripts y datos (sintética)'],['triage','HU-010','Revisión de fallos (borradores de defecto)'],['pipeline','HU-007','Pipeline de Azure DevOps'],['performance_design','HU-008A','Diseño de prueba de performance'],
   ['azure_work_item','HU-006','Work Item de Azure DevOps (vista previa)']].map(([key, hu, label]) => ({key, hu, label, state:'pending', ready:false, why:null}));
 const STEP_STATE = { done: 'Hecho', action: 'Requiere tu decisión', stale: 'Desactualizado', failed: 'Falló', skipped: 'No aplica', pending: '' };
 function renderFlow(){
@@ -277,11 +277,11 @@ function renderFlow(){
   const next = (f?.next || [])[0];
   const steps = f?.steps || DEFAULT_STEPS;
   document.getElementById('steps').innerHTML = steps.map(st => {
-    const isNext = next && ((next.goal && next.goal === st.key) || (next.type === 'approve' && ('approve_'+next.artifact) === st.key) || (next.type === 'decide_suggestions' && st.key === 'story_revision'));
+    const isNext = next && ((next.goal && next.goal === st.key) || (next.type === 'approve' && ('approve_'+next.artifact) === st.key) || (next.type === 'decide_suggestions' && st.key === 'story_revision') || (next.type === 'review_defects' && st.key === 'triage'));
     const cls = (isNext && st.state !== 'done') ? 'next' : st.state;
     const verify = st.state === 'done' && st.version && st.approved === false && ['automation','data_validation','pipeline','performance_design','azure_work_item'].includes(st.key);
     const sub = st.state === 'done' && st.version ? 'v'+st.version+(verify ? ' · pendiente de tu verificación' : st.approved ? ' · aprobado' : '') : (STEP_STATE[st.state] || (st.ready ? '' : (st.why || '')));
-    const action = (f?.next || []).find(a => (a.goal === st.key) || (a.type === 'approve' && 'approve_'+a.artifact === st.key) || (a.type === 'decide_suggestions' && st.key === 'story_revision'));
+    const action = (f?.next || []).find(a => (a.goal === st.key) || (a.type === 'approve' && 'approve_'+a.artifact === st.key) || (a.type === 'decide_suggestions' && st.key === 'story_revision') || (a.type === 'review_defects' && st.key === 'triage'));
     const btn = action ? '<button class="btn step-btn" data-i="'+(f.next.indexOf(action))+'">'+esc(action.label)+'</button>' : '';
     return '<li class="'+cls+'"><span class="state"></span><div><span>'+esc(st.label)+'</span>'+(sub ? '<span class="sub">'+esc(sub)+'</span>' : '')+btn+'</div><span class="hu">'+esc(st.hu)+'</span></li>';
   }).join('');
@@ -328,6 +328,10 @@ async function act(action, label){
 }
 function runSuggested(a){
   if(a.type === 'say'){ input.focus(); return; }
+  if(a.type === 'review_defects'){
+    const t = addTurn('assistant', '<p>'+esc((a.why ? a.why+' ' : '')+'Clasifica cada fallo; la sugerencia viene precargada:')+'</p>'+actionForm(a));
+    bindForms(t); return;
+  }
   if(a.type === 'decide_suggestions' || ((a.type === 'input' || a.type === 'tool_input') && a.params?.length) || (a.type === 'approve' && a.confirm_assumptions?.length)){
     const t = addTurn('assistant', '<p>'+esc(a.type === 'input' || a.type === 'tool_input' ? (a.why ? 'Sugerida porque '+a.why+'. ' : '')+'Necesito estos datos para continuar:' : a.type === 'approve' ? 'Antes de aprobar, confirma los supuestos del borrador:' : 'Decide qué sugerencias INVEST aplicar:')+'</p>'+actionForm(a));
     bindForms(t); return;
@@ -367,7 +371,10 @@ function bindForms(root){
   root.querySelectorAll('[data-action]').forEach(b => { const a = lastActions[+b.dataset.action]; b.onclick = () => runSuggested(a); });
   root.querySelectorAll('form[data-form]').forEach(f => f.onsubmit = e => {
     e.preventDefault(); const a = JSON.parse(f.dataset.form);
-    if(a.type === 'decide_suggestions'){
+    if(a.type === 'review_defects'){
+      const decisions = {}; f.querySelectorAll('select').forEach(s => decisions[s.name] = s.value);
+      act({type:'review_defects', decisions}, 'Registra mi revisión de los fallos.');
+    } else if(a.type === 'decide_suggestions'){
       const decisions = {}; f.querySelectorAll('input[type=checkbox]').forEach(c => decisions[c.name] = c.checked ? 'approved' : 'rejected');
       act({type:'decide_suggestions', decisions}, 'Aplica las sugerencias marcadas.');
     } else if(a.type === 'input' || a.type === 'tool_input'){
@@ -379,8 +386,13 @@ function bindForms(root){
     }
   });
 }
+const DEFECT_DECISIONS = { defect: 'Defecto del producto', test_issue: 'Caso, script o consulta mal planteados', environment: 'Ambiente o infraestructura' };
 function actionForm(a){
   const data = esc(JSON.stringify(a));
+  if(a.type === 'review_defects') return '<form class="form" data-form="'+data+'">'+a.defects.map(d => '<label>'+'<span><strong>'+esc(d.id)+'</strong> · '+esc(d.title)+
+    '<div class="suggest">Sugerencia: '+esc(d.suggested_reason)+'</div></span><select name="'+esc(d.id)+'">'+Object.entries(DEFECT_DECISIONS).map(([k, v]) =>
+      '<option value="'+k+'"'+((d.decision || d.suggested) === k ? ' selected' : '')+'>'+esc(v)+'</option>').join('')+'</select></label>').join('')+
+    '<div><button class="btn" type="submit">'+icon('check-circle')+'Registrar mi revisión</button></div></form>';
   if(a.type === 'decide_suggestions') return '<form class="form" data-form="'+data+'">'+a.suggestions.map(s => '<label class="row"><input type="checkbox" name="'+esc(s.name)+'" checked><span><strong>'+esc(s.name)+'</strong> ('+esc(s.status)+'): '+esc(s.suggestion)+'</span></label>').join('')+'<div><button class="btn" type="submit">'+icon('check-circle')+'Aplicar decisiones</button></div></form>';
   if(a.type === 'input' || a.type === 'tool_input') return '<form class="form" data-form="'+data+'">'+a.params.map(p => '<label>'+esc(p.question)+
     (p.choices?.length ? '<select name="'+esc(p.name)+'">'+p.choices.map(c => '<option>'+esc(c)+'</option>').join('')+'</select>'
@@ -404,7 +416,8 @@ function assistantTrace(a){
 const APPROVABLE = ['story', 'matrix', 'automation', 'data_validation', 'pipeline', 'performance_design', 'azure_work_item'];
 function renderArtifact(a, changes){
   const r = { story: storyDoc, invest: renderInvest, matrix: renderMatrix, risk: renderRisk, automation: renderAutomation, pipeline: renderPipeline,
-              performance_design: renderPerformance, azure_work_item: renderWorkItem, database_validation: renderDbValidation, data_validation: renderDataValidation, execution: renderExecution }[a.kind];
+              performance_design: renderPerformance, azure_work_item: renderWorkItem, database_validation: renderDbValidation, data_validation: renderDataValidation, execution: renderExecution,
+              triage: renderTriage }[a.kind];
   if(!r) return '';
   // Verificación humana (RT-02): cada entregable se aprueba o rechaza sobre la versión mostrada.
   const review = APPROVABLE.includes(a.kind) && !a.approved ? '<div class="doc-actions" style="border:none;background:none;padding:10px 0 0">'+
@@ -511,7 +524,26 @@ function renderDbValidation(a){
       q.rows.map(r => '<tr>'+Object.values(r).map(v => '<td>'+esc(v)+'</td>').join('')+'</tr>').join('')+'</tbody></table></div>' : (q.status==='completed' ? '<div class="suggest">Sin filas: la regla se cumple.</div>' : ''))+
     (q.report_id ? '<div style="margin-top:8px"><a class="btn" href="'+API+'/v1/reports/'+encodeURIComponent(q.report_id)+'/download">Descargar evidencia</a></div>' : '')+'</div>').join('')+'</div>';
 }
-function renderPipeline(a){ return head('Pipeline de Azure DevOps', 'refresh', ['<span class="chip">YAML</span>', statusChip(a), '<span class="chip ok">Solo PR</span>'])+'<pre class="code">'+esc(a.data.yaml)+'</pre></div>'; }
+function renderPipeline(a){
+  const chips = ['<span class="chip">YAML</span>', statusChip(a), '<span class="chip ok">Solo PR</span>'];
+  if(a.data.data_validation) chips.push('<span class="chip">Validación de datos (HU-011)</span>');
+  if(a.data.reports_to) chips.push('<span class="chip">Resultados de vuelta a Valkiria</span>');
+  return head('Pipeline de Azure DevOps', 'refresh', chips)+'<pre class="code">'+esc(a.data.yaml)+'</pre>'+
+    Object.entries(a.data.files || {}).map(([f, code]) => '<details class="file"><summary>'+esc(f)+'</summary><pre class="code">'+esc(code)+'</pre></details>').join('')+
+    (a.warnings?.length ? '<div class="doc-body"><div class="suggest">'+a.warnings.map(esc).join('<br>')+'</div></div>' : '')+'</div>';
+}
+function renderTriage(a){
+  const ds = a.data.defects || [];
+  const label = { defect: 'Defecto', test_issue: 'Caso o script', environment: 'Ambiente' };
+  return head('Revisión de fallos · ejecución v'+a.data.execution_version+(a.data.source === 'azure-devops' ? ' (Azure DevOps)' : ''), 'flask',
+      ['<span class="chip '+(ds.length ? 'bad' : 'ok')+'">'+ds.length+' fallo(s)</span>', a.approved ? '<span class="chip ok">Revisada</span>' : '<span class="chip warn">Pendiente de tu revisión</span>'])+
+    ds.map(d => '<div class="doc-body" style="border-top:1px solid var(--border-soft)"><div class="label">'+esc(d.id)+' · '+esc(d.title)+
+      ' <span class="chip">'+esc(label[d.suggested] || d.suggested)+' (sugerido)</span>'+(d.criterion_id ? ' <span class="chip">'+esc(d.criterion_id)+'</span>' : '')+'</div>'+
+      '<div class="suggest">'+esc(d.suggested_reason)+'</div>'+
+      '<div><strong>Esperado:</strong> '+esc(d.expected)+'<br><strong>Obtenido:</strong> '+esc(d.actual)+(d.failed_step ? '<br><strong>Paso:</strong> '+esc(d.failed_step) : '')+'</div>'+
+      '<details class="file"><summary>Borrador de Bug (Azure Boards, vista previa)</summary><pre class="code">'+esc(JSON.stringify(d.azure_bug, null, 2))+'</pre></details></div>').join('')+
+    (a.warnings?.length ? '<div class="doc-body"><div class="suggest">'+a.warnings.map(esc).join('<br>')+'</div></div>' : '')+'</div>';
+}
 function renderPerformance(a){
   const d = a.data;
   return head('Diseño de prueba de performance', 'bar-chart', ['<span class="chip">'+esc(d.tool)+'</span>', statusChip(a), '<span class="chip">No ejecutada</span>'])+'<div class="doc-body"><div class="chips">'+

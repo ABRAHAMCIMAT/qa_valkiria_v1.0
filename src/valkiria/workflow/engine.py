@@ -14,11 +14,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from pydantic import ValidationError
 
+from valkiria.application.defects import DECISIONS
 from valkiria.application.prompts import PROMPT_VERSION
 from valkiria.application.qa_artifacts import PolicyViolation
 from valkiria.application.use_cases import ValkiriaService, _story_changes
@@ -34,9 +36,14 @@ from valkiria.memory.service import (
 )
 from valkiria.providers.openai_compatible import LLMProviderError
 from valkiria.workflow.graph import CAPABILITIES, artifact_of, detect_goals
-from valkiria.workflow.planner import WorkflowPlan, actionable_suggestions, plan
+from valkiria.workflow.planner import (
+    WorkflowPlan,
+    actionable_suggestions,
+    plan,
+    unreviewed_failures,
+)
 from valkiria.workflow.state import Approval, StepFailure, WorkflowState, WorkflowStore
-from valkiria.workflow.steps import EXECUTORS, StepError
+from valkiria.workflow.steps import EXECUTORS, StepError, execution_output
 
 DEFAULT_GOALS = ["story", "invest"]
 # Datos del usuario que determinan el resultado de cada paso (además de sus dependencias).
@@ -44,6 +51,9 @@ INPUT_KEYS = {"automation": ("framework", "platform", "repository", "base_branch
               "performance_design": ("performance_users", "performance_duration_seconds", "performance_sla_ms", "performance_tool", "performance_type"),
               "azure_work_item": ("azure_project",)}
 EDITABLE = {"story": UserStory, "matrix": TestMatrix}
+# Pasos con efectos en un ambiente: se ejecutan solo cuando se piden; si cambian sus insumos quedan desactualizados, sin repetirse solos.
+ONE_SHOT = {"execution", "triage"}
+_CASE_KEY = re.compile(r"[^a-z0-9]")
 
 
 class WorkflowNotFound(LookupError):
@@ -100,6 +110,8 @@ class WorkflowEngine:
             state = await self._load(workflow_id)
             new_goals = list(goals or (detect_goals(request) if request else []))
             state.params.update(params)
+            for goal in new_goals:
+                state.failures.pop(goal, None)  # pedirlo de nuevo es reintentarlo
             if new_goals:
                 state.goals = self._merge_goals(state.goals, new_goals)
                 state.think("goals", f"{actor} agregó objetivos: {', '.join(new_goals)}.")
@@ -116,10 +128,12 @@ class WorkflowEngine:
         async with self._lock(workflow_id):
             state = await self._load(workflow_id)
             state.think("resume", "Reanudación solicitada; se reintentan los pasos fallidos.")
+            state.failures = {}
             return await self._run(state)
 
     async def approve(self, workflow_id: str, *, artifact: str, version: int, content_hash: str | None, decision: str, actor: str, comment: str = "",
-                      suggestions: dict[str, str] | None = None, assumptions_confirmed: bool = False) -> tuple[WorkflowState, WorkflowPlan]:
+                      suggestions: dict[str, str] | None = None, assumptions_confirmed: bool = False,
+                      defect_decisions: dict[str, str] | None = None) -> tuple[WorkflowState, WorkflowPlan]:
         async with self._lock(workflow_id):
             state = await self._load(workflow_id)
             record = state.artifacts.get(artifact)
@@ -141,6 +155,16 @@ class WorkflowEngine:
                 if set(decided) != set(pending):
                     raise WorkflowConflict("suggestion_decisions_required:" + ",".join(sorted(set(pending) - set(decided))))
                 details["suggestions"] = decided
+            if artifact == "triage" and decision == "approved":
+                # Cada fallo se clasifica explícitamente: defecto, caso mal planteado o ambiente (RT-02).
+                ids = [d["id"] for d in record.payload.get("defects", [])]
+                chosen = {i: v for i, v in (defect_decisions or {}).items() if i in ids and v in DECISIONS}
+                if set(chosen) != set(ids):
+                    raise WorkflowConflict("defect_decisions_required:" + ",".join(sorted(set(ids) - set(chosen))))
+                details["decisions"] = chosen
+            if artifact == "pipeline" and decision == "approved" and unreviewed_failures(state):
+                # Un pull request no se aprueba con fallos de ejecución sin revisar (HU-010).
+                raise WorkflowConflict("unreviewed_failures:" + ",".join(unreviewed_failures(state)))
             record.approval = Approval(version=record.version, content_hash=record.content_hash, decision=decision, actor=actor, comment=comment, details=details)
             state.think("approval", f"{actor} {'aprobó' if decision == 'approved' else 'rechazó'} '{artifact}' v{record.version}" + (f": {comment}" if comment else "") + ".", artifact)
             await self._learn_from_approval(state, artifact, decision, actor, comment, details)
@@ -195,6 +219,39 @@ class WorkflowEngine:
             record = state.put_artifact(artifact, payload, produced_by="manual_edit", based_on=current.based_on, warnings=[f"Editado por {actor}."])
             state.think("edit", f"{actor} editó '{artifact}'; queda v{record.version} pendiente de aprobación.", artifact)
             await self._learn_from_edit(state, artifact, current.payload, payload, actor)
+            return await self._run(state)
+
+    async def record_pipeline_results(self, workflow_id: str, *, results: list[dict[str, Any]], run_id: str, actor: str = "azure-devops") -> tuple[WorkflowState, WorkflowPlan]:
+        """Resultados JUnit del pipeline de Azure DevOps: quedan como una nueva ejecución HU-010 con su revisión de fallos."""
+        async with self._lock(workflow_id):
+            state = await self._load(workflow_id)
+            automation, data = state.artifacts.get("automation"), state.artifacts.get("data_validation")
+            known = [c["id"] for c in state.artifacts["matrix"].payload.get("cases", [])] if "matrix" in state.artifacts else []
+            queries = {q["id"]: q for q in (data.payload.get("queries", []) if data else [])}
+            mapped = []
+            for item in results:
+                if item.get("result") == "skipped":
+                    continue
+                text = _CASE_KEY.sub("", f"{item.get('classname', '')} {item.get('name', '')}".lower())
+                matches = [cid for cid in [*queries, *known] if _CASE_KEY.sub("", cid.lower()) in text]
+                query_id = next((m for m in matches if m in queries), None)
+                case_id = max((m for m in matches if m not in queries), key=len, default=None) or (queries[query_id].get("case_id") if query_id else None)
+                kind = "database" if query_id or item.get("classname") == "HU-011" else (automation.payload.get("platform", "web") if automation else "web")
+                mapped.append({"case_id": case_id or str(item.get("name", ""))[:80], "criterion_id": None, "kind": kind, "source": "azure-devops",
+                               "request": f"Azure DevOps · {item.get('file', 'junit')}", "status": item.get("result"), "result": item.get("result"),
+                               "detail": str(item.get("message") or "")[:300] or None, "duration_ms": item.get("duration_ms"), "traced": bool(case_id)})
+            if not mapped:
+                raise WorkflowConflict("pipeline_results_empty")
+            untraced = [m["case_id"] for m in mapped if not m["traced"]]
+            notes = [f"Resultados sin caso de la matriz asociado: {', '.join(untraced[:5])}."] if untraced else []
+            based_on = {k: r.version for k, r in (("automation", automation), ("data_validation", data)) if r and r.approved}
+            output = execution_output(state, mapped, platform=automation.payload.get("platform") if automation else None,
+                                      framework=automation.payload.get("framework") if automation else None, based_on=based_on, notes=notes,
+                                      source="azure-devops", run_id=run_id)
+            record = state.put_artifact("execution", output.payload, produced_by="azure_pipeline", based_on=output.based_on, warnings=output.warnings)
+            state.think("executed", f"HU-010: {actor} envió {len(mapped)} resultado(s) de la corrida {run_id}. {output.summary} Resultado: 'execution' v{record.version}.",
+                        "execution")
+            state.goals = self._merge_goals(state.goals, ["triage"])
             return await self._run(state)
 
     async def get(self, workflow_id: str) -> tuple[WorkflowState, WorkflowPlan]:
@@ -309,7 +366,11 @@ class WorkflowEngine:
         await self._remember(state, "human_correction", content, f"edit:{artifact}", actor, [artifact])
 
     async def _run(self, state: WorkflowState) -> tuple[WorkflowState, WorkflowPlan]:
-        exhausted: set[str] = set()
+        # Un paso que ya falló no se reintenta con cada acción ajena (aprobar otra cosa, conversar): solo si se pide o se reanuda.
+        exhausted: set[str] = set(state.failures)
+        if "execution" in state.goals:
+            # Toda ejecución deja lista su revisión de fallos (determinista, sin modelo).
+            state.goals = self._merge_goals(state.goals, ["triage"])
         # Cota de seguridad: cada capacidad puede ejecutarse a lo sumo dos veces por llamada.
         for _ in range(2 * len(CAPABILITIES)):
             current = plan(state, state.goals, exhausted=exhausted)
@@ -322,6 +383,8 @@ class WorkflowEngine:
                 exhausted.add(step.capability)
             state = await self.store.save(state)
         final = plan(state, state.goals, exhausted=exhausted)
+        # Los pasos de un solo uso salen de los objetivos: no se repiten solos cuando cambian sus insumos.
+        state.goals = [g for g in state.goals if g not in ONE_SHOT]
         summary = {"completed": "Todos los objetivos están cumplidos.", "waiting_approval": "Se requiere aprobación humana para continuar: " + ", ".join(final.pending_approvals) + ".",
                    "needs_input": "Faltan datos: " + ", ".join(final.missing_inputs) + ".", "failed": "Hay pasos fallidos; se pueden reanudar.",
                    "partially_completed": "Algunas capacidades solicitadas aún no están disponibles."}.get(final.status, final.status)

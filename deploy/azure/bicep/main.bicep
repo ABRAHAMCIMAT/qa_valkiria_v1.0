@@ -30,6 +30,14 @@ param postgresAdminLogin string = 'valkiriaadmin'
 @secure()
 param postgresAdminPassword string
 
+@description('Token con que el pipeline de Azure DevOps envía resultados a Valkiria (HU-010). Vacío: se genera uno nuevo en cada despliegue.')
+@secure()
+param pipelineCallbackToken string = ''
+
+@description('Valor generado cuando no se indica pipelineCallbackToken (no se pasa a mano).')
+@secure()
+param generatedPipelineToken string = newGuid()
+
 @description('Namespace y ServiceAccount de Kubernetes que usarán la identidad administrada.')
 param kubernetesNamespace string = 'valkiria'
 param kubernetesServiceAccount string = 'valkiria-api'
@@ -228,6 +236,15 @@ resource workflowDatabaseUrlSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01
   name: 'workflow-database-url'
   properties: {
     value: 'postgresql+psycopg://${postgresAdminLogin}:${uriComponent(postgresAdminPassword)}@${postgres.properties.fullyQualifiedDomainName}:5432/${workflowDatabaseName}?sslmode=require'
+  }
+}
+
+// La API lo recibe como VALKIRIA_PIPELINE_CALLBACK_TOKEN; el pipeline lo lee con el mismo nombre desde un grupo de variables ligado a este Key Vault.
+resource pipelineTokenSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+  parent: keyVault
+  name: 'valkiria-pipeline-token'
+  properties: {
+    value: empty(pipelineCallbackToken) ? generatedPipelineToken : pipelineCallbackToken
   }
 }
 

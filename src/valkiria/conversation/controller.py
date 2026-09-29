@@ -27,6 +27,7 @@ from valkiria.application.automation_execution import (
     export_test_cases_to_excel,
     static_analyse_database_script,
 )
+from valkiria.application.defects import DECISIONS as DEFECT_DECISIONS
 from valkiria.application.prompts import (
     SMALLTALK_SYSTEM,
     SQL_VALIDATION_SYSTEM,
@@ -271,6 +272,8 @@ class _Turn:
             return await self.reject(str(action.get("artifact", "story")), str(action.get("comment") or ""))
         if kind == "decide_suggestions":
             return await self.decide_suggestions(dict(action.get("decisions") or {}))
+        if kind == "review_defects":
+            return await self.review_defects(dict(action.get("decisions") or {}))
         if kind == "edit_story":
             return await self.edit_story(str(action.get("instruction") or "Mejora la historia"))
         if kind == "new_story":
@@ -409,6 +412,10 @@ class _Turn:
                     result["artifact"] = {**result["artifact"], "data": {k: v for k, v in result["artifact"]["data"].items() if k != "report"} | {"report_id": report["id"]}}
             if goal == "risk":
                 result |= self._suggest_performance()
+            if goal in {"execution", "triage"}:
+                review = next((x for x in flow_view(self.state)["next"] if x["type"] == "review_defects"), None)
+                if review:
+                    result["actions"] = [review]
             return result
         if step and step.missing_inputs:
             questions = " ".join(q for q in (_question(n) for n in step.missing_inputs))
@@ -430,13 +437,21 @@ class _Turn:
         record = self.state.artifacts[artifact]
         if record.approved:
             return {"intent": "conversar", "reply": f"{_the(artifact).capitalize()} v{record.version} ya está aprobado.", "with_resume": True}
+        if artifact == "triage":
+            return self._review_prompt("Para aprobar la revisión clasifica cada fallo:")
         if artifact == "story" and record.assumptions and not assumptions_confirmed:
             return {"intent": "aclarar", "reply": "Antes de aprobar, confirma los supuestos del borrador (HU-003B): " + "; ".join(record.assumptions)
                     + ". ¿Son correctos? Si alguno no lo es, dime cómo corregirlo y genero una nueva versión.",
                     "actions": [{"type": "approve", "artifact": "story", "label": "Confirmo los supuestos y apruebo", "assumptions_confirmed": True},
                                 {"type": "edit_story", "label": "Corregir un supuesto", "instruction": "Corrige los supuestos de la historia"}]}
-        self.state, _ = await self.c.workflows.approve(self.state.id, artifact=artifact, version=record.version, content_hash=record.content_hash, decision="approved",
-                                                       actor=self.actor, assumptions_confirmed=assumptions_confirmed)
+        try:
+            self.state, _ = await self.c.workflows.approve(self.state.id, artifact=artifact, version=record.version, content_hash=record.content_hash, decision="approved",
+                                                           actor=self.actor, assumptions_confirmed=assumptions_confirmed)
+        except WorkflowConflict as exc:
+            if str(exc).startswith("unreviewed_failures"):
+                return self._review_prompt(f"Todavía no puedo aprobar {_the(artifact)}: la última ejecución tiene fallos sin revisar y el pull request "
+                                           "no se aprueba con fallos pendientes (HU-010). Clasifica cada uno:")
+            raise
         return {"intent": "aprobar", "reply": f"Aprobé {_the(artifact)} v{record.version} a tu nombre (RT-02). Lo dejé registrado y lo tomaré en cuenta "
                 "para las siguientes historias.", "with_resume": True}
 
@@ -472,6 +487,44 @@ class _Turn:
         return {"intent": "paso", "reply": "Registré tus decisiones sobre las sugerencias INVEST" + (" y ninguna requiere una nueva versión." if not approved else "."),
                 "with_resume": True}
 
+    async def review_defects(self, decisions: dict[str, str]) -> dict[str, Any]:
+        """HU-010: el humano clasifica cada fallo; los defectos confirmados quedan como borradores de Bug y el PR se desbloquea."""
+        record = self.state.artifacts.get("triage") if self.state else None
+        if not record or not record.payload.get("defects"):
+            return {"intent": "conversar", "reply": "No hay fallos pendientes de revisar.", "with_resume": True}
+        try:
+            self.state, _ = await self.c.workflows.approve(self.state.id, artifact="triage", version=record.version, content_hash=record.content_hash,
+                                                           decision="approved", actor=self.actor, defect_decisions=decisions)
+        except WorkflowConflict as exc:
+            if str(exc).startswith("defect_decisions_required"):
+                return self._review_prompt("Me falta tu decisión sobre algunos fallos: " + str(exc).split(":", 1)[1].replace(",", ", ") + ".")
+            if str(exc).startswith("stale_version"):
+                return self._review_prompt("Hubo una ejecución nueva mientras revisabas; esta es la revisión vigente:")
+            raise
+        chosen = self.state.artifacts["triage"].approval.details["decisions"]
+        count = {kind: [d for d in record.payload["defects"] if chosen[d["id"]] == kind] for kind in ("defect", "test_issue", "environment")}
+        parts = []
+        if count["defect"]:
+            parts.append(f"{len(count['defect'])} defecto(s) confirmados como borradores de Bug de Azure Boards ({', '.join(d['case_id'] for d in count['defect'])}); "
+                         "se publican cuando se decida la herramienta de gestión (HU-004B)")
+        if count["test_issue"]:
+            parts.append(f"{len(count['test_issue'])} caso(s) o script(s) mal planteados ({', '.join(d['case_id'] for d in count['test_issue'])}): al corregir la matriz, "
+                         "los scripts o las consultas se crea una versión nueva y la ejecución queda desactualizada para repetirla")
+        if count["environment"]:
+            parts.append(f"{len(count['environment'])} fallo(s) de ambiente: revísalo y vuelve a ejecutar")
+        unlocked = " El pull request ya puede aprobarse." if "pipeline" in self.state.artifacts else ""
+        return {"intent": "aprobar", "reply": "Registré tu revisión a tu nombre (RT-02): " + "; ".join(parts) + "." + unlocked, "artifact": self._artifact("triage"),
+                "with_resume": True}
+
+    def _review_prompt(self, intro: str) -> dict[str, Any]:
+        action = next((a for a in flow_view(self.state)["next"] if a["type"] == "review_defects"), None)
+        if not action:
+            return {"intent": "conversar", "reply": "No hay fallos pendientes de revisar.", "with_resume": True}
+        lines = " ".join(f"{d['id']} ({d['case_id']}): sugiero «{DEFECT_DECISIONS[d['suggested']].lower()}» porque {d['suggested_reason'][0].lower()}{d['suggested_reason'][1:]}"
+                         for d in action["defects"][:3])
+        more = f" Y {len(action['defects']) - 3} más en la tarjeta." if len(action["defects"]) > 3 else ""
+        return {"intent": "aclarar", "reply": f"{intro} {lines}{more}", "actions": [action], "artifact": self._artifact("triage")}
+
     async def continue_flow(self) -> dict[str, Any]:
         view = flow_view(self.state)
         first = next(iter(view["next"]), None)
@@ -484,6 +537,8 @@ class _Turn:
             record = self.state.artifacts[first["artifact"]]
             return {"intent": "aclarar", "actions": [first],
                     "reply": f"El siguiente paso es aprobar {_the(first['artifact'])} v{record.version}. ¿Lo revisaste y das tu aprobación?"}
+        if first["type"] == "review_defects":
+            return self._review_prompt("El siguiente paso es revisar los fallos de la ejecución antes del pull request.")
         if first["type"] == "decide_suggestions":
             return {"intent": "aclarar", "reply": "El siguiente paso es decidir qué sugerencias INVEST aplicar. Márcalas abajo y genero la nueva versión.", "actions": [first]}
         if first["type"] == "input":
@@ -652,7 +707,7 @@ class _Turn:
                 "assumptions": record.assumptions} | extra
 
     def _also(self, produced: list[str], goal: str) -> str:
-        others = [LABELS[k].lower() for k in produced if k != goal and k in LABELS]
+        others = [LABELS[k].lower() for k in produced if k != goal and k in LABELS and k != "triage"]
         return f" También regeneré {', '.join(others)} porque dependían de este paso." if others else ""
 
     def _describe(self, goal: str, *, fresh: bool) -> str:
@@ -689,8 +744,18 @@ class _Turn:
                      f"{summary['database']} consulta(s) de datos (HU-011)" if summary.get("database") else "",
                      f"{summary['web']} caso(s) web" if summary.get("web") else ""]
             notes = [w for w in record.warnings if w.startswith(("Los scripts web", "Las consultas de datos no"))]
-            return (f"{prefix}: ejecuté contra el entorno sintético {' y '.join(x for x in parts if x) or 'lo verificado'}: {summary['passed']} de {summary['total']} "
-                    f"aprobados ({outcome}). La evidencia consolidada en PDF queda descargable." + (" " + " ".join(notes) if notes else ""))
+            where = f"recibí del pipeline de Azure DevOps (corrida {p.get('run_id')})" if p.get("source") == "azure-devops" else "ejecuté contra el entorno sintético"
+            review = (f" Preparé {summary['failed']} borrador(es) de defecto, uno por caso fallido, con una clasificación sugerida: revísalos antes de aprobar "
+                      "el pull request." if summary["failed"] else "")
+            return (f"{prefix}: {where} {' y '.join(x for x in parts if x) or 'lo verificado'}: {summary['passed']} de {summary['total']} "
+                    f"aprobados ({outcome}). La evidencia consolidada en PDF queda descargable." + (" " + " ".join(notes) if notes else "") + review)
+        if goal == "triage":
+            defects = p.get("defects", [])
+            if not defects:
+                return f"{prefix}: la ejecución v{p['execution_version']} no tuvo fallos que revisar."
+            s = p["summary"]
+            return (f"{prefix}: hay {len(defects)} fallo(s) de la ejecución v{p['execution_version']} por revisar. Sugerencia: {s['defect']} defecto(s), "
+                    f"{s['test_issue']} caso(s) o script(s) mal planteados y {s['environment']} de ambiente. Tú decides cada uno; el PR se aprueba después.")
         if goal == "data_validation":
             ready = [q for q in p["queries"] if q["status"] == "lista"]
             blocked = len(p["queries"]) - len(ready)
@@ -709,7 +774,7 @@ class _Turn:
 
 def _the(artifact: str) -> str:
     return {"story": "la historia de usuario", "matrix": "la matriz de pruebas", "azure_work_item": "el Work Item de Azure DevOps", "invest": "la evaluación INVEST",
-            "automation": "los scripts de automatización", "execution": "la ejecución de los scripts", "data_validation": "las consultas de validación de datos", "pipeline": "el pipeline de Azure DevOps", "performance_design": "el diseño de la prueba de performance"}.get(
+            "automation": "los scripts de automatización", "execution": "la ejecución de los scripts", "triage": "la revisión de fallos", "data_validation": "las consultas de validación de datos", "pipeline": "el pipeline de Azure DevOps", "performance_design": "el diseño de la prueba de performance"}.get(
         artifact, LABELS.get(artifact, artifact).lower())
 
 

@@ -77,6 +77,28 @@ En ambos casos queda la evidencia en PDF descargable y los fallos se reportan ta
 
 Los pasos que escribe el modelo suelen ser vagos ("Buscar vehículo disponible") o mezclar pantallas. Por eso cada paso se **aterriza en el catálogo de pantallas** (`SCREENS`): el botón o el campo que existe, navegando de pantalla si hace falta. Antes de enviar un formulario se capturan los datos del caso para sus campos. Un paso que no corresponde a nada del catálogo se intenta tal cual y falla señalándolo, nunca se omite en silencio. La matriz recibe el catálogo de pantallas y los datos sintéticos que existen, para que sus casos sean ejecutables.
 
+## Los resultados alimentan el flujo
+
+- **Revisión de fallos.** Cada ejecución (local o del pipeline) deja un paso "Revisión de fallos" con un borrador de defecto por caso fallido. El borrador está ligado a su caso y criterio e incluye los pasos para reproducir, lo esperado frente a lo obtenido y la evidencia (reporte y captura). Usa los campos de un Bug de Azure Boards como vista previa.
+  - **Clasificación sugerida:** es determinista y sin modelo. Si un paso no existe en la pantalla o se espera un mensaje que la aplicación nunca muestra, sugiere *caso mal planteado*. Si la API no responde, *ambiente*. Si todos los pasos corren y el resultado difiere, *posible defecto*.
+  - **Decisión humana:** tú clasificas cada fallo (RT-02). Al repetir la ejecución, los fallos idénticos traen precargada tu decisión anterior.
+  - **Publicación:** queda pendiente de decidir la herramienta de gestión (HU-004B).
+- **PR bloqueado con fallos sin revisar.** Mientras la ejecución vigente tenga fallos sin clasificar, el pipeline (el pull request) no se aprueba. Valkiria lo explica y ofrece la revisión.
+- **Ejecución desactualizada.** Si cambian los scripts o las consultas, la ejecución queda "Desactualizada", pero no se repite sola: ejecutar tiene efectos en un ambiente, así que se vuelve a pedir, y solo con lo aprobado.
+
+## El pipeline de Azure DevOps ejecuta lo mismo y devuelve los resultados
+
+El YAML generado (HU-007) incluye estas etapas:
+1. **Test:** los scripts aprobados, con JUnit publicado. Admite `test-results.xml` de Playwright y pytest, *surefire* de Maven para RestAssured y `newman/*.xml`.
+2. **DataValidation:** si hay consultas HU-011 aprobadas, corre `valkiria/validate_data.py` con esas consultas (`valkiria/queries.json`). Cada una se ejecuta en una transacción `READ ONLY` y queda como caso JUnit.
+3. **ReportToValkiria:** con `condition: always()`, `valkiria/report_results.py` junta los JUnit y los envía a `POST /v1/workflows/{id}/pipeline-results`.
+
+Valkiria registra esos resultados como una nueva versión de la ejecución (origen: Azure DevOps). Los asocia a los casos de la matriz, incluidos los nombres de pytest, y prepara su revisión de fallos.
+
+- **Autenticación:** `Authorization: Bearer` con `VALKIRIA_PIPELINE_CALLBACK_TOKEN`. Sin token configurado, el endpoint responde 503.
+- **Token en Azure:** lo crea Bicep como el secreto `valkiria-pipeline-token` de Key Vault, con el mismo nombre que usa el YAML. Un grupo de variables de Azure DevOps ligado a ese Key Vault lo entrega sin copiarlo. Además del token, el grupo necesita `synthetic-database-url` y `valkiria-url`.
+- **Local:** Compose y kind traen un token exclusivo del entorno local.
+
 ## Herramientas del panel
 
 La lista completa sale del servidor: validación de base de datos, exportación a Excel y las 15 herramientas y skills del [asistente](asistente.md). Cada una usa la memoria de la conversación y la HU en curso:

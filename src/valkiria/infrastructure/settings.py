@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     # Memoria corta (sesión) y larga (conocimiento validado). Vacío: usa la base de los flujos; ambas vacías: en memoria.
     memory_enabled: bool = True
     memory_database_url: SecretStr | None = None
+    # Token con que el pipeline de Azure DevOps envía sus resultados (HU-010); viene de Key Vault, nunca del repositorio.
+    pipeline_callback_token: SecretStr | None = None
     memory_short_term_turns: int = Field(default=12, ge=2, le=100)
     memory_short_term_ttl_minutes: int = Field(default=120, ge=1, le=10080)
     memory_long_term_top_k: int = Field(default=4, ge=0, le=20)

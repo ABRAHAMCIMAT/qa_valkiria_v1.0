@@ -15,5 +15,7 @@ secretGenerator:
     literals:
       # Credencial exclusiva del PostgreSQL efímero de pruebas.
       - VALKIRIA_SYNTHETIC_DATABASE_URL=postgresql+psycopg://valkiria:valkiria_synthetic_only@postgres:5432/nissan_synthetic
+      # Token exclusivo del clúster local para probar el envío de resultados del pipeline (HU-010).
+      - VALKIRIA_PIPELINE_CALLBACK_TOKEN=valkiria_local_pipeline_only
 patches:
   - path: api-patch.yaml

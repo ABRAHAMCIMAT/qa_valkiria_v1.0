@@ -2,6 +2,46 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/).
 
+## 2026-09-29 — Los resultados alimentan el flujo y el pipeline de Azure DevOps (incremento 3)
+
+### Añadido
+- **Revisión de fallos** (paso nuevo tras HU-010, `application/defects.py`):
+  - Un borrador de defecto por caso fallido, ligado a su caso y criterio, con los pasos para reproducir, lo esperado frente a lo obtenido y la evidencia.
+  - Clasificación sugerida y determinista (defecto, caso o script mal planteado, ambiente); la decisión es humana por cada fallo.
+  - Vista previa de Bug de Azure Boards; su publicación queda pendiente de decidir la herramienta (HU-004B).
+  - Los fallos idénticos conservan la decisión anterior.
+- **Bloqueo del PR:** el pipeline no se aprueba mientras la ejecución vigente tenga fallos sin revisar.
+- **Pipeline de Azure DevOps** (HU-007):
+  - JUnit publicado para cada stack.
+  - Etapa **DataValidation** con las consultas HU-011 aprobadas (`validate_data.py`, transacción de solo lectura).
+  - Etapa **ReportToValkiria** (`report_results.py`) que envía los resultados de vuelta.
+- **Endpoint** `POST /v1/workflows/{id}/pipeline-results`:
+  - Autenticado con `VALKIRIA_PIPELINE_CALLBACK_TOKEN`; sin token responde 503.
+  - Registra una nueva ejecución de origen Azure DevOps, asociada a los casos de la matriz, y prepara su revisión.
+- **Token:** Bicep crea el secreto `valkiria-pipeline-token` en Key Vault, sincronizado a la API por CSI. Compose y kind traen un token solo para el entorno local.
+- **Frontend:**
+  - Tarjeta de revisión con una decisión por fallo.
+  - Paso "Revisión de fallos" en el flujo.
+  - El pipeline muestra sus archivos y requisitos.
+
+- **Aviso en la matriz:** en modo sintético avisa, antes de aprobarla, de los casos de interfaz que nunca envían el formulario o que van y vienen entre pantallas; al ejecutarse fallarían por diseño.
+
+### Cambiado
+- Un paso que falló ya no se reintenta con cada acción ajena (aprobar otra cosa, conversar); solo cuando se vuelve a pedir o se reanuda. En vivo, una validación de datos fallida se reintentaba en cada aprobación y la hacía tardar unos 140 s.
+- `SQL_VALIDATION_SYSTEM` sube de 700 a 1200 tokens: con matrices de 15 casos, el JSON llegaba truncado.
+- La ejecución y su revisión son pasos de un solo uso. Si cambian los scripts o las consultas, quedan desactualizadas, sin repetirse solas; se vuelven a pedir y solo usan lo aprobado.
+- Las consultas de datos solo cuentan para el pipeline y la ejecución una vez aprobadas.
+
+### Verificado en vivo (Llama 3.2, Compose)
+- **Flujo completo** de la HU de órdenes de venta: matriz de 15 casos, 4 consultas de datos (2 bloqueadas por el análisis estático) y scripts Playwright web.
+- **Ejecución en Valkiria:** 3 de 17 aprobados, con 14 borradores de defecto. El PR quedó bloqueado hasta revisarlos y, tras la revisión, se aprobó.
+- **Simulación local del pipeline** con los archivos generados:
+  - `npx playwright test` sobre los scripts;
+  - `validate_data.py` contra PostgreSQL;
+  - `report_results.py` hacia `/pipeline-results` (HTTP 200).
+- **Resultado del pipeline:** la ejecución v2 de origen Azure DevOps dio los mismos 3 de 17 que la local, con su revisión de fallos.
+- **Clasificación de fallos:** 13 de los 14 los causó el diseño del caso (nunca presiona "Registrar orden") y ahora se clasifican como tales.
+
 ## 2026-09-29 — Pantallas web sintéticas y ejecución de scripts web (incremento 2)
 
 ### Añadido

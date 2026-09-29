@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import logging
 from pathlib import Path
 from typing import Any, Literal
@@ -165,6 +166,23 @@ class WorkflowApprovalReq(BaseModel):
     suggestions: dict[str, Literal["approved", "rejected"]] | None = None
     # HU-003B, regla 4: confirma los supuestos del borrador de la HU antes de aprobarla.
     assumptions_confirmed: bool = False
+    # HU-010: clasificación humana de cada fallo al aprobar la revisión (defect, test_issue o environment).
+    defect_decisions: dict[str, Literal["defect", "test_issue", "environment"]] | None = None
+
+
+class PipelineResult(BaseModel):
+    name: str = Field(max_length=500)
+    classname: str = Field(default="", max_length=300)
+    result: Literal["pass", "fail", "error", "skipped"]
+    message: str = Field(default="", max_length=2000)
+    duration_ms: float | None = None
+    file: str = Field(default="junit", max_length=200)
+
+
+class PipelineResultsReq(BaseModel):
+    run_id: str = Field(min_length=1, max_length=100)
+    source: Literal["azure-devops"] = "azure-devops"
+    results: list[PipelineResult] = Field(min_length=1, max_length=2000)
 
 
 class WorkflowEditReq(BaseModel):
@@ -499,7 +517,22 @@ def create_app(llm=None, synthetic_transport=None, web_runner=None):
     @app.post("/v1/workflows/{workflow_id}/approvals")
     async def approve_workflow_artifact(workflow_id: str, req: WorkflowApprovalReq, x_actor: str = Header(default="anonymous")):
         return view(*await workflows.approve(workflow_id, artifact=req.artifact, version=req.version, content_hash=req.content_hash, decision=req.decision,
-                                             actor=x_actor, comment=req.comment, suggestions=req.suggestions, assumptions_confirmed=req.assumptions_confirmed))
+                                             actor=x_actor, comment=req.comment, suggestions=req.suggestions, assumptions_confirmed=req.assumptions_confirmed,
+                                             defect_decisions=req.defect_decisions))
+
+    @app.post("/v1/workflows/{workflow_id}/pipeline-results")
+    async def pipeline_results(workflow_id: str, req: PipelineResultsReq, authorization: str = Header(default="")):
+        """HU-010 desde Azure DevOps: el pipeline envía sus resultados JUnit y quedan como una nueva ejecución con revisión de fallos."""
+        expected = settings.secret("pipeline_callback_token")
+        if not expected:
+            raise HTTPException(503, "pipeline_callback_not_configured")
+        if not hmac.compare_digest(authorization.removeprefix("Bearer ").strip().encode(), expected.encode()):
+            raise HTTPException(401, "invalid_pipeline_token")
+        state, current = await workflows.record_pipeline_results(workflow_id, results=[r.model_dump() for r in req.results], run_id=req.run_id)
+        report = state.artifacts["execution"].payload.get("report")
+        if report:
+            await reports.save(report)
+        return view(state, current)
 
     @app.put("/v1/workflows/{workflow_id}/artifacts/{artifact}")
     async def edit_workflow_artifact(workflow_id: str, artifact: str, req: WorkflowEditReq, x_actor: str = Header(default="anonymous")):

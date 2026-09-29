@@ -23,6 +23,13 @@ from valkiria.application.automation_runner import (
     execute_api_cases,
     execute_data_queries,
 )
+from valkiria.application.defects import (
+    DECISIONS,
+    carry_decisions,
+    case_design_issue,
+    triage,
+)
+from valkiria.application.pipeline_files import pipeline_files
 from valkiria.application.prompts import (
     INVEST_SYSTEM,
     REVISION_SYSTEM,
@@ -175,6 +182,12 @@ async def run_matrix(state: WorkflowState, service: ValkiriaService, memory: str
     TestMatrix.model_validate({"story_id": str(story.id), "cases": cases})
     if not state.artifacts["story"].approved:
         warnings.append("Matriz generada desde una HU en borrador (HU-004, regla 4).")
+    if service.ui_guide:
+        # Antes de aprobar: casos de interfaz que no podrán dar su resultado en las pantallas (se ven igual al ejecutarlos).
+        flawed = [c["id"] for c in cases if case_design_issue(c)]
+        if flawed:
+            warnings.append(f"{len(flawed)} caso(s) de interfaz no envían el formulario o van y vienen entre pantallas ({', '.join(flawed[:6])}"
+                            f"{'…' if len(flawed) > 6 else ''}): así fallarán al ejecutarse. Corrígelos antes de aprobar la matriz.")
     return StepOutput({"story_id": str(story.id), "story_version": state.artifacts["story"].version, "cases": cases}, _versions(state, "story"), warnings,
                       f"Matriz con {len(cases)} casos para {len(ids)} criterio(s).")
 
@@ -319,22 +332,49 @@ async def run_execution(state: WorkflowState, service: ValkiriaService, memory: 
             notes.append("Las consultas de datos no se ejecutaron: la base sintética no está configurada en este entorno.")
         else:
             results += await execute_data_queries(approved_data.payload["queries"], executor=service.database_executor, trace_id=state.trace_id)
+    based_on = {k: v for k, v in {"automation": approved_scripts.version if approved_scripts else None, "data_validation": approved_data.version if approved_data else None}.items() if v}
+    return execution_output(state, results, platform=platform, framework=framework, based_on=based_on, notes=notes, source="valkiria")
+
+
+def execution_output(state: WorkflowState, results: list[dict[str, Any]], *, platform: str | None, framework: str | None, based_on: dict[str, int],
+                     notes: list[str], source: str, run_id: str | None = None) -> StepOutput:
+    """Resultado de HU-010 con evidencia consolidada; lo usan la ejecución local y los resultados que envía el pipeline de Azure DevOps."""
     passed = sum(r.get("result", r.get("status")) == "pass" for r in results)
     by_kind = {kind: sum(r.get("kind") == kind for r in results) for kind in ("api", "database", "web")}
-    execution_id = f"HU-010-{state.id[:8]}-{(automation.version if automation else 0)}-{(data.version if data else 0)}"
+    version = state.artifacts["execution"].version + 1 if "execution" in state.artifacts else 1
+    execution_id = f"HU-010-{state.id[:8]}-v{version}" + (f"-run{run_id}" if run_id else "")
+    origin = f"pipeline de Azure DevOps (corrida {run_id})" if source == "azure-devops" else "entorno sintético (Valkiria)"
     report = build_evidence_report(execution_id=execution_id, title="Valkiria · Evidencia de ejecución (HU-010 / HU-011)", output_format="pdf",
-                                   fields={"historia": state.artifacts["story"].payload.get("title"), "stack": f"{framework} ({platform})" if framework else "solo datos",
+                                   fields={"historia": state.artifacts["story"].payload.get("title"), "origen": origin,
+                                           "stack": f"{framework} ({platform})" if framework else "solo datos",
                                            "casos_api": by_kind["api"], "consultas_datos": by_kind["database"], "casos_web": by_kind["web"],
                                            "aprobados": passed, "fallidos": len(results) - passed, "trace_id": state.trace_id},
                                    logs=[_evidence_line(r) for r in results])
-    warnings = ["Ejecución en el entorno sintético, nunca en producción.", *notes]
+    warnings = ["Ejecución en el entorno sintético, nunca en producción." if source == "valkiria" else f"Resultados recibidos del {origin}.", *notes]
     if passed < len(results):
-        warnings.append(f"{len(results) - passed} caso(s) fallidos: revisa la evidencia antes de integrar el pull request.")
-    based_on = {k: v for k, v in {"automation": approved_scripts.version if approved_scripts else None, "data_validation": approved_data.version if approved_data else None}.items() if v}
-    return StepOutput({"platform": platform, "framework": framework, "results": results, "report": report,
+        warnings.append(f"{len(results) - passed} caso(s) fallidos: revísalos (borradores de defecto) antes de aprobar el pull request.")
+    return StepOutput({"platform": platform, "framework": framework, "results": results, "report": report, "source": source, "run_id": run_id,
                        "summary": {"total": len(results), "passed": passed, "failed": len(results) - passed, "errors": sum(r.get("result") == "error" for r in results), **by_kind}},
                       based_on, warnings,
-                      f"{passed} de {len(results)} casos aprobados en la ejecución sintética.")
+                      f"{passed} de {len(results)} casos aprobados ({origin}).")
+
+
+async def run_triage(state: WorkflowState, service: ValkiriaService, memory: str = "") -> StepOutput:
+    """Revisión de fallos (HU-010): un borrador de defecto por caso fallido, con una clasificación sugerida que decide el humano."""
+    execution = state.artifacts["execution"]
+    cases = {c["id"]: c for c in state.artifacts["matrix"].payload.get("cases", [])} if "matrix" in state.artifacts else {}
+    previous = state.artifacts.get("triage")
+    decided = previous.approval.details.get("decisions", {}) if previous and previous.approval else {}
+    carried = carry_decisions([d | {"decision": decided.get(d["id"])} for d in previous.payload.get("defects", [])]) if previous else {}
+    defects = triage(execution.payload.get("results", []), cases, execution_version=execution.version,
+                     report_id=(execution.payload.get("report") or {}).get("id"), story_title=str(state.artifacts["story"].payload.get("title", "")), previous=carried)
+    by_suggestion = {key: sum(d["suggested"] == key for d in defects) for key in DECISIONS}
+    warnings = ["Borradores en formato Bug de Azure Boards (vista previa): se publican cuando se decida la herramienta de gestión (HU-004B)."] if defects else []
+    if any(d["decision"] for d in defects):
+        warnings.append("Se precargaron tus decisiones anteriores sobre los mismos casos; confírmalas.")
+    return StepOutput({"execution_version": execution.version, "source": execution.payload.get("source", "valkiria"), "defects": defects,
+                       "summary": {"failed": len(defects), **by_suggestion}}, _versions(state, "execution"), warnings,
+                      f"{len(defects)} fallo(s) por revisar." if defects else "Sin fallos que revisar.")
 
 
 def _evidence_line(result: dict[str, Any]) -> str:
@@ -345,7 +385,7 @@ def _evidence_line(result: dict[str, Any]) -> str:
     return f"{result['case_id']} [{result.get('kind')}] {result.get('request', '')} -> {result.get('status')} esperado {result.get('expected_status', '')} ({result.get('result', '')})"
 
 
-RUN_COMMANDS = {"playwright": "npx playwright test", "selenium": "pytest tests", "restassured": "mvn -B test",
+RUN_COMMANDS = {"playwright": "npx playwright test", "selenium": "pytest tests --junitxml=test-results.xml", "restassured": "mvn -B test",
                 "postman-newman": "npx newman run {file} --env-var baseUrl=$(BASE_URL) --reporters cli,junit"}
 
 
@@ -361,9 +401,16 @@ async def run_pipeline(state: WorkflowState, service: ValkiriaService, memory: s
                 line = command.format(file=item) if item else command
                 if line not in scripts:
                     scripts.append(line)
-    text = generate_pipeline_yaml(scripts=scripts or None)
+    data = state.artifacts.get("data_validation")
+    queries = data.payload.get("queries") if data and data.approved else None
+    text = generate_pipeline_yaml(scripts=scripts or None, data_validation=bool(queries), workflow_id=state.id)
     warnings = [] if scripts else ["Sin scripts todavía: la etapa de test queda con advertencia y no reporta pruebas aprobadas (HU-007)."]
-    return StepOutput({"yaml": text, "scripts": scripts, "delivery": "pull_request_only"}, _versions(state, "automation"), warnings, f"Pipeline YAML con {len(scripts)} comando(s) de prueba.")
+    if data and not data.approved:
+        warnings.append("Las consultas de datos (HU-011) no están aprobadas: el pipeline no incluye la etapa de validación de datos.")
+    warnings.append("Requiere en el grupo de variables (ligado a Key Vault): synthetic-database-url, valkiria-url y valkiria-pipeline-token; nunca en el repositorio.")
+    return StepOutput({"yaml": text, "scripts": scripts, "files": pipeline_files(queries), "data_validation": bool(queries), "reports_to": "valkiria",
+                       "delivery": "pull_request_only"}, _versions(state, "automation") | ({"data_validation": data.version} if queries else {}), warnings,
+                      f"Pipeline YAML con {len(scripts)} comando(s) de prueba" + (" y validación de datos." if queries else "."))
 
 
 async def run_performance_design(state: WorkflowState, service: ValkiriaService, memory: str = "") -> StepOutput:
@@ -400,6 +447,7 @@ EXECUTORS = {
     "automation": run_automation,
     "data_validation": run_data_validation,
     "execution": run_execution,
+    "triage": run_triage,
     "pipeline": run_pipeline,
     "performance_design": run_performance_design,
     "azure_work_item": run_azure_work_item,

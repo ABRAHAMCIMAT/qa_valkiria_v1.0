@@ -16,6 +16,7 @@ from valkiria.workflow.planner import (
     INPUT_QUESTIONS,
     actionable_suggestions,
     approved_suggestions,
+    unreviewed_failures,
 )
 from valkiria.workflow.state import WorkflowState
 
@@ -31,6 +32,7 @@ STEPS: list[tuple[str, str, str, str | None, tuple[tuple[str, bool], ...]]] = [
     ("automation", "HU-009", "Scripts de automatización", "automation", (("matrix", False),)),
     ("data_validation", "HU-011", "Validación de datos (sintética)", "data_validation", (("matrix", False),)),
     ("execution", "HU-010", "Ejecución de scripts y datos (sintética)", "execution", ()),
+    ("triage", "HU-010", "Revisión de fallos (borradores de defecto)", "triage", (("execution", False),)),
     ("pipeline", "HU-007", "Pipeline de Azure DevOps", "pipeline", ()),
     ("performance_design", "HU-008A", "Diseño de prueba de performance", "performance_design", (("story", False),)),
     ("azure_work_item", "HU-006", "Work Item de Azure DevOps (vista previa)", "azure_work_item", (("story", True),)),
@@ -38,7 +40,7 @@ STEPS: list[tuple[str, str, str, str | None, tuple[tuple[str, bool], ...]]] = [
 LABELS = {key: label for key, _, label, _, _ in STEPS}
 INPUTS = {"automation": ("framework", "repository"), "performance_design": ("performance_users", "performance_duration_seconds", "performance_sla_ms"),
           "azure_work_item": ("azure_project",)}
-RUN_LABELS = {"invest": "Evaluar INVEST", "matrix": "Generar la matriz de pruebas", "risk": "Evaluar el riesgo", "automation": "Generar los scripts",
+RUN_LABELS = {"triage": "Revisar los fallos de la ejecución", "invest": "Evaluar INVEST", "matrix": "Generar la matriz de pruebas", "risk": "Evaluar el riesgo", "automation": "Generar los scripts",
               "data_validation": "Derivar las consultas de validación de datos", "execution": "Ejecutar lo verificado en el entorno sintético",
               "pipeline": "Generar el pipeline", "performance_design": "Diseñar la prueba de performance", "azure_work_item": "Preparar el Work Item"}
 
@@ -116,6 +118,15 @@ def _step(state: WorkflowState, key: str, hu: str, label: str, artifact: str | N
         elif invest and (invest.approved and not approved_suggestions(state) or not actionable_suggestions(invest.payload.get("criteria", []))):
             step |= {"state": "skipped", "why": "No hay sugerencias INVEST por aplicar."}
         return step
+    if key == "triage":
+        execution, record = state.artifacts.get("execution"), state.artifacts.get("triage")
+        if execution and not execution.payload.get("summary", {}).get("failed"):
+            return step | {"state": "skipped", "why": "La ejecución no tuvo fallos."}
+        if record and execution and record.based_on.get("execution") == execution.version:
+            pending = not record.approved and bool(record.payload.get("defects"))
+            return step | {"state": "action" if pending else "done", "version": record.version, "content_hash": record.content_hash, "approved": record.approved,
+                           "why": f"{len(record.payload['defects'])} fallo(s) por clasificar; el PR no se aprueba hasta revisarlos." if pending else None}
+        return step | ({"state": "stale", "why": "Hay una ejecución nueva sin revisar."} if record else {})
     if key in {"approve_story", "approve_matrix"}:
         record = state.artifacts.get("story" if key == "approve_story" else "matrix")
         if record:
@@ -201,6 +212,15 @@ def next_actions(state: WorkflowState, steps: list[dict[str, Any]]) -> list[dict
         if key == "matrix" and by_key["approve_matrix"]["state"] == "action" and step["state"] == "done":
             add({"type": "approve", "artifact": "matrix", "label": f"Aprobar la matriz v{by_key['approve_matrix']['version']}",
                  "version": by_key["approve_matrix"]["version"], "content_hash": by_key["approve_matrix"]["content_hash"], "confirm_assumptions": []})
+    if by_key["triage"]["state"] in {"action", "stale"}:
+        # HU-010: los fallos se revisan antes del PR; cada uno se clasifica como defecto, caso mal planteado o ambiente.
+        record = state.artifacts.get("triage")
+        if record and by_key["triage"]["state"] == "action":
+            add({"type": "review_defects", "label": f"Revisar {len(record.payload['defects'])} fallo(s) de la ejecución", "version": record.version,
+                 "content_hash": record.content_hash, "why": "El pull request no se aprueba mientras haya fallos sin revisar.",
+                 "defects": [{k: d.get(k) for k in ("id", "case_id", "title", "suggested", "suggested_reason", "decision")} for d in record.payload["defects"]]})
+        else:
+            add({"type": "run", "goal": "triage", "label": "Preparar la revisión de fallos"})
     if decide and story_approved:
         # Con la HU ya aprobada, nuevas sugerencias INVEST son opcionales: no frenan el avance del flujo.
         decide["label"] = "Revisar nuevas sugerencias INVEST (opcional)"
@@ -209,6 +229,8 @@ def next_actions(state: WorkflowState, steps: list[dict[str, Any]]) -> list[dict
     for key, label in (("automation", "Verificar y aprobar los scripts (PR)"), ("data_validation", "Verificar y aprobar las consultas de datos"), ("pipeline", "Verificar y aprobar el pipeline (PR)"),
                        ("performance_design", "Verificar y aprobar el diseño de performance"), ("azure_work_item", "Aprobar la publicación del Work Item")):
         record = state.artifacts.get(key)
+        if key == "pipeline" and unreviewed_failures(state):
+            continue  # el PR espera la revisión de fallos (acción "Revisar fallos")
         if record and not record.approved and not _stale(state, key):
             add({"type": "approve", "artifact": key, "label": label, "version": record.version, "content_hash": record.content_hash, "confirm_assumptions": []})
     return actions[:8]

@@ -95,6 +95,18 @@ class WorkflowPlan:
         return actions
 
 
+def unreviewed_failures(state: WorkflowState) -> list[str]:
+    """Casos fallidos de la ejecución vigente que nadie ha revisado: mientras existan, el pull request no se aprueba (HU-010)."""
+    execution = state.artifacts.get("execution")
+    if not execution or not execution.payload.get("summary", {}).get("failed"):
+        return []
+    failed = [str(r.get("case_id")) for r in execution.payload.get("results", []) if r.get("result", r.get("status")) != "pass"]
+    triage = state.artifacts.get("triage")
+    if not triage or triage.based_on.get("execution") != execution.version or not triage.approved:
+        return failed
+    return []
+
+
 def _stale_dependencies(state: WorkflowState, key: str) -> list[str]:
     record = state.artifacts.get(artifact_of(key))
     if not record:
@@ -105,7 +117,8 @@ def _stale_dependencies(state: WorkflowState, key: str) -> list[str]:
     declared = {r.artifact for r in capability.requires} | set(capability.optional)
     stale = [dependency for dependency, version in record.based_on.items() if dependency in declared and dependency in state.artifacts and state.artifacts[dependency].version != version]
     # Una dependencia opcional que apareció después (por ejemplo, scripts para el pipeline) también obliga a regenerar.
-    stale += [dependency for dependency in capability.optional if dependency in state.artifacts and dependency not in record.based_on]
+    stale += [dependency for dependency in capability.optional if dependency in state.artifacts and dependency not in record.based_on
+              and (dependency not in capability.optional_approved or state.artifacts[dependency].approved)]
     # Los datos del usuario con que se generó (stack, repositorio, parámetros de performance) también cuentan: si cambiaron, se regenera.
     stale += [f"dato:{name}" for name, value in record.inputs.items() if name in state.params and state.params[name] != value]
     return stale

@@ -25,6 +25,8 @@ class Capability:
     requires: tuple[Requirement, ...] = ()
     # Se usan si existen, pero no bloquean (por ejemplo, el pipeline referencia scripts si ya hay).
     optional: tuple[str, ...] = ()
+    # Opcionales que solo cuentan una vez aprobados (la ejecución usa lo verificado; el pipeline, las consultas aprobadas).
+    optional_approved: tuple[str, ...] = ()
     # El artefacto resultante necesita aprobación humana antes de que otros lo consuman como aprobado.
     approvable: bool = False
     # Parámetros que el usuario debe aportar; sin ellos el paso queda en "needs_input".
@@ -53,9 +55,14 @@ CAPABILITIES: dict[str, Capability] = {
                    keywords=("valida los datos", "validar los datos", "validación de datos", "validacion de datos", "consultas de datos", "reglas de datos",
                              "valida la base", "validar la base", "consultas sql")),
         Capability("execution", "HU-010", "Ejecución de scripts y consultas en el entorno sintético", optional=("automation", "data_validation"),
+                   optional_approved=("automation", "data_validation"),
                    keywords=("ejecuta los scripts", "ejecutar los scripts", "corre los scripts", "ejecuta las pruebas", "ejecutar las pruebas", "corre las pruebas",
                              "ejecuta la automatización", "ejecuta la automatizacion", "ejecuta la validación", "ejecuta la validacion", "ejecución de scripts", "ejecucion de scripts")),
-        Capability("pipeline", "HU-007", "YAML de pipeline de Azure DevOps", optional=("automation",), approvable=True,
+        Capability("triage", "HU-010", "Revisión de fallos y borradores de defecto", requires=(Requirement("execution"),), approvable=True,
+                   keywords=("revisa los fallos", "revisar los fallos", "revisión de fallos", "revision de fallos", "borradores de defecto", "defectos",
+                             "reporta los defectos", "triage")),
+        Capability("pipeline", "HU-007", "YAML de pipeline de Azure DevOps", optional=("automation", "data_validation"), optional_approved=("data_validation",),
+                   approvable=True,
                    keywords=("pipeline", "yaml")),
         Capability("performance_design", "HU-008A", "Diseño de prueba de performance", requires=(Requirement("story"),),
                    inputs=("performance_users", "performance_duration_seconds", "performance_sla_ms"), approvable=True,
