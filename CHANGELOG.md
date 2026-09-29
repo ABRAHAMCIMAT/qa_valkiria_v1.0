@@ -2,6 +2,25 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/).
 
+## 2026-09-29 — HU-011 en el flujo y ejecución unificada HU-010 (incremento 1)
+
+### Añadido
+- Paso **HU-011 Validación de datos** tras la matriz.
+  - **Consultas:** de solo lectura, derivadas de las reglas de la HU y de los casos negativos y de borde, cada una ligada a su criterio y caso y con su resultado esperado ("sin filas" si buscan violaciones).
+  - **Validación previa:** cada consulta se prueba en la base sintética; si falla se corrige una vez y, si no, queda inválida. Se muestra cuántas filas devuelve hoy, para detectar una expectativa mal planteada antes de aprobar.
+  - **Sugerencia y aprobación:** se sugiere si la HU tiene reglas de datos, y requiere verificación humana.
+- **HU-010 unificada:** ejecuta en una corrida los casos de API y las consultas de datos aprobadas.
+  - Veredicto por caso y evidencia PDF consolidada.
+  - Los errores de SQL se reportan aparte de los fallos de datos.
+  - Los scripts web sin interfaz se omiten con aviso.
+- La herramienta "Validación de base de datos" usa el paso del flujo cuando hay HU y matriz.
+
+### Cambiado
+- La HU nueva se redacta con `STORY_SYSTEM`: de 36 s, con tiempos agotados, a 10 s. La cortesía usa `SMALLTALK_SYSTEM`. Un requerimiento demasiado vago recibe preguntas en lugar de una HU inventada.
+- El proveedor reintenta una vez si el JSON llega incompleto, pidiendo JSON compacto. El mensaje distingue "respuesta incompleta" de "no respondió a tiempo".
+- Sin HU en curso, pedir un paso del flujo explica que primero se necesita la historia.
+- Ollama local con `OLLAMA_KEEP_ALIVE=24h`, como en AKS. `PROMPT_VERSION = "v4"`.
+
 ## 2026-09-29 — Scripts reales, ejecución HU-010, verificación humana y herramientas contextuales
 
 ### Añadido

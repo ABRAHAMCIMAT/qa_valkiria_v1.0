@@ -14,12 +14,13 @@ El chat (`POST /v1/chat`) está atendido por el **conductor de la conversación*
 | 6 | Aprobación de la matriz | RT-02 | Botón o "apruebo la matriz" |
 | 7 | Análisis de riesgo | HU-005 | Requiere la HU aprobada; si no lo está, se explica la dependencia |
 | 8 | Scripts de automatización | HU-009 | Pide el stack y el repositorio si faltan. Genera código real por caso y pasa lint y detección de secretos. **Verificación humana** antes del PR |
-| 9 | Ejecución de scripts (sintética) | HU-010 | Requiere los scripts aprobados. Ejecuta las mismas llamadas de los scripts contra la app sintética y genera evidencia PDF |
-| 10 | Pipeline de Azure DevOps | HU-007 | Comando de prueba según el stack (`npx playwright test`, `pytest`, `mvn test`, `newman run`). **Verificación humana** |
-| 11 | Diseño de prueba de performance | HU-008A | Se **sugiere** con riesgo alto o si la HU tiene requisitos de rendimiento. Tipo carga, estrés o picos; pide usuarios, duración y SLA. **Verificación humana** |
-| 12 | Work Item de Azure DevOps | HU-006 | Vista previa y aprobación |
+| 9 | Validación de datos (sintética) | HU-011 | Se **sugiere** si la HU tiene reglas de datos. Deriva consultas de solo lectura de las reglas y de los casos negativos y de borde, ligadas a criterio y caso, con su resultado esperado. Cada consulta se prueba antes en la base sintética: si falla se corrige una vez y, si no, queda inválida. Muestra cuántas filas devuelve hoy. **Verificación humana** |
+| 10 | Ejecución unificada (sintética) | HU-010 | Requiere scripts o consultas aprobados. Ejecuta en una sola corrida los casos de API (mismas llamadas de los scripts) y las consultas de datos (ejecutor seguro de HU-011). Veredicto por caso y evidencia PDF consolidada. Los errores de SQL se reportan aparte de los fallos de datos |
+| 11 | Pipeline de Azure DevOps | HU-007 | Comando de prueba según el stack (`npx playwright test`, `pytest`, `mvn test`, `newman run`). **Verificación humana** |
+| 12 | Diseño de prueba de performance | HU-008A | Se **sugiere** con riesgo alto o si la HU tiene requisitos de rendimiento. Tipo carga, estrés o picos; pide usuarios, duración y SLA. **Verificación humana** |
+| 13 | Work Item de Azure DevOps | HU-006 | Vista previa y aprobación |
 
-El panel lateral de la interfaz muestra los 12 pasos desde el inicio, con su estado (hecho, requiere tu decisión, desactualizado, falló o no aplica), el siguiente paso sugerido y un botón para cada paso que se puede ejecutar. También muestra la HU en curso con su historial de versiones.
+El panel lateral de la interfaz muestra los 13 pasos desde el inicio, con su estado (hecho, requiere tu decisión, desactualizado, falló o no aplica), el siguiente paso sugerido y un botón para cada paso que se puede ejecutar. También muestra la HU en curso con su historial de versiones.
 
 ## Cómo decide qué hacer con cada mensaje
 

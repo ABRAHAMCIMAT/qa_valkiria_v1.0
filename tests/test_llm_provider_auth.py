@@ -37,3 +37,19 @@ async def test_no_credentials_sent_without_key(monkeypatch, auth_header):
     llm = make_llm(monkeypatch, captured, base_url="http://ollama.test/v1", model_name="m", auth_header=auth_header)
     await llm.generate_json(system="s", user="u", schema={})
     assert "authorization" not in captured["headers"] and "api-key" not in captured["headers"]
+
+
+async def test_truncated_json_is_retried_once_asking_for_compact_json(monkeypatch):
+    # Caso real en vivo: con sangría, la respuesta agotó el tope de tokens y llegó cortada (JSONDecodeError).
+    bodies = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(request.content.decode())
+        content = '{"story": {"title": "cortado' if len(bodies) == 1 else '{"ok": true}'
+        return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+
+    original = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: original(transport=httpx.MockTransport(handler), **kw))
+    llm = OpenAICompatibleLLM("http://ollama.test/v1", "m")
+    assert await llm.generate_json(system="s", user="u", schema={}) == {"ok": True}
+    assert len(bodies) == 2 and "JSON compacto" in bodies[1]

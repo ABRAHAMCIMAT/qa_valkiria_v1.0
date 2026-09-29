@@ -40,6 +40,16 @@ class OpenAICompatibleLLM:
         return {"Authorization": f"Bearer {self.api_key}"}
 
     async def generate_json(self, *, system: str, user: str, schema: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return await self._request(system, user)
+        except LLMProviderError as exc:
+            if exc.code != "llm_invalid_response":
+                raise
+            # Un modelo pequeño a veces entrega JSON cortado (con sangría, agota el tope de tokens) o mal formado:
+            # se reintenta una vez pidiendo JSON compacto. Si vuelve a fallar, se informa (RT-04), nunca se inventa.
+            return await self._request(system, user + "\n\nResponde con JSON compacto en una sola línea, sin sangrías ni texto adicional.")
+
+    async def _request(self, system: str, user: str) -> dict[str, Any]:
         headers = self._auth_headers()
         # RT-05: credenciales, tokens y correos no se envían al modelo aunque el usuario los escriba.
         payload = {"model": self.model_name, "messages": [{"role": "system", "content": system}, {"role": "user", "content": redact(user)}], "temperature": 0.1,

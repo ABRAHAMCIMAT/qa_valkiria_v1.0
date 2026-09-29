@@ -84,7 +84,7 @@ async def test_artifacts_record_model_and_prompt_version():
 
 def test_chat_answers_politely_with_trace_id_when_the_model_fails():
     llm = ScriptedLLM()
-    llm.failures["chat"] = -1
+    llm.failures["story"] = -1
     api = TestClient(create_app(llm=llm))
     response = api.post("/v1/chat", json={"message": "Necesito que los asesores vean el stock por agencia"}, headers={"X-Trace-Id": "trace-rt04"})
     body = response.json()
@@ -94,7 +94,6 @@ def test_chat_answers_politely_with_trace_id_when_the_model_fails():
 
 def test_courtesy_is_answered_conversationally_not_with_tools():
     llm = ScriptedLLM()
-    llm.chat_response = {"intent": "conversar", "reply": "¡Hola! Qué gusto saludarte. ¿En qué historia trabajamos hoy?", "assumptions": [], "story": None, "split": []}
     api = TestClient(create_app(llm=llm))
     for message in ("hola", "¡Gracias, quedó muy bien!", "No entiendes nada, eso no es lo que pedí"):
         body = api.post("/v1/chat", json={"message": message}).json()

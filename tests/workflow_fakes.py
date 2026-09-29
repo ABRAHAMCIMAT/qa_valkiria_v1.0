@@ -4,7 +4,7 @@ from valkiria.application import prompts
 from valkiria.providers.openai_compatible import LLMProviderError
 
 # El LLM simulado reconoce cada tarea por su prompt de sistema exacto: reescribir un prompt no rompe las pruebas.
-_BY_PROMPT = {prompts.SQL_VALIDATION_SYSTEM: "sql", prompts.STORY_EDIT_SYSTEM: "edit", prompts.STORY_SPLIT_SYSTEM: "split", prompts.INVEST_SUGGESTION_SYSTEM: "suggestion", prompts.ASSISTANT_ARGS_SYSTEM: "args", prompts.ASSISTANT_COMPOSE_SYSTEM: "compose", prompts.CHAT_SYSTEM: "chat", prompts.REVISION_SYSTEM: "revision",
+_BY_PROMPT = {prompts.SMALLTALK_SYSTEM: "smalltalk", prompts.SQL_VALIDATION_SYSTEM: "sql", prompts.STORY_EDIT_SYSTEM: "edit", prompts.STORY_SPLIT_SYSTEM: "split", prompts.INVEST_SUGGESTION_SYSTEM: "suggestion", prompts.ASSISTANT_ARGS_SYSTEM: "args", prompts.ASSISTANT_COMPOSE_SYSTEM: "compose", prompts.CHAT_SYSTEM: "chat", prompts.REVISION_SYSTEM: "revision",
               prompts.STORY_SYSTEM: "story", prompts.INVEST_SYSTEM: "invest", prompts.MATRIX_SYSTEM: "matrix", prompts.RISK_SYSTEM: "risk"}
 _ASSISTANT_PREFIX = prompts.ASSISTANT_SYSTEM.split("{")[0]
 
@@ -44,6 +44,7 @@ class ScriptedLLM:
         self.chat_response: dict | None = None
         self.split_response: dict | None = None
         self.edit_response: dict | None = None
+        self.smalltalk_reply = "¡Hola! Qué gusto saludarte. ¿En qué historia trabajamos hoy?"
         self.failures: dict[str, int] = {}
         self.matrix = full_matrix()
         self.story = STORY
@@ -54,9 +55,17 @@ class ScriptedLLM:
         if kind == "args":
             self.calls.append("args")
             return self.args_script.pop(0) if self.args_script else {}
+        if kind == "smalltalk":
+            self.calls.append("smalltalk")
+            if self.failures.get("smalltalk") == -1:
+                raise LLMProviderError("llm_timeout", "timeout")
+            return {"reply": self.smalltalk_reply}
         if kind == "sql":
             self.calls.append("sql")
-            return {"queries": [{"purpose": "Vehículos disponibles con stock", "sql": "SELECT vehicle_id, model, stock FROM vehicles WHERE stock > 0 LIMIT 20"},
+            return {"queries": [{"purpose": "Hay vehículos disponibles con stock", "criterion_id": "AC-01", "case_id": "TC-AC-01-P", "expect": "rows",
+                                 "sql": "SELECT vehicle_id, model, stock FROM vehicles WHERE stock > 0 LIMIT 20"},
+                                {"purpose": "Ningún vehículo sin stock aparece disponible", "criterion_id": "AC-02", "case_id": "TC-AC-02-N", "expect": "empty",
+                                 "sql": "SELECT i.inventory_id FROM inventory i JOIN vehicles v ON v.vehicle_id = i.vehicle_id WHERE i.available = TRUE AND v.stock <= 0 LIMIT 20"},
                                 {"purpose": "Intento de mutación", "sql": "DELETE FROM vehicles"}]}
         if kind == "edit":
             self.calls.append("edit")

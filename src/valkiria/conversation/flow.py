@@ -29,7 +29,8 @@ STEPS: list[tuple[str, str, str, str | None, tuple[tuple[str, bool], ...]]] = [
     ("approve_matrix", "RT-02", "Aprobación de la matriz", None, (("matrix", False),)),
     ("risk", "HU-005", "Análisis de riesgo", "risk", (("story", True),)),
     ("automation", "HU-009", "Scripts de automatización", "automation", (("matrix", False),)),
-    ("execution", "HU-010", "Ejecución de scripts (sintética)", "execution", (("automation", True),)),
+    ("data_validation", "HU-011", "Validación de datos (sintética)", "data_validation", (("matrix", False),)),
+    ("execution", "HU-010", "Ejecución de scripts y datos (sintética)", "execution", ()),
     ("pipeline", "HU-007", "Pipeline de Azure DevOps", "pipeline", ()),
     ("performance_design", "HU-008A", "Diseño de prueba de performance", "performance_design", (("story", False),)),
     ("azure_work_item", "HU-006", "Work Item de Azure DevOps (vista previa)", "azure_work_item", (("story", True),)),
@@ -38,7 +39,7 @@ LABELS = {key: label for key, _, label, _, _ in STEPS}
 INPUTS = {"automation": ("framework", "repository"), "performance_design": ("performance_users", "performance_duration_seconds", "performance_sla_ms"),
           "azure_work_item": ("azure_project",)}
 RUN_LABELS = {"invest": "Evaluar INVEST", "matrix": "Generar la matriz de pruebas", "risk": "Evaluar el riesgo", "automation": "Generar los scripts",
-              "execution": "Ejecutar los scripts en la app sintética",
+              "data_validation": "Derivar las consultas de validación de datos", "execution": "Ejecutar lo verificado en el entorno sintético",
               "pipeline": "Generar el pipeline", "performance_design": "Diseñar la prueba de performance", "azure_work_item": "Preparar el Work Item"}
 
 
@@ -58,6 +59,23 @@ def performance_reason(state: WorkflowState | None) -> str | None:
                                              *(c.get("text", "") for c in story.payload.get("acceptance_criteria", []))]))):
         return "la historia tiene requisitos de rendimiento (tiempos, volumen o concurrencia)"
     return None
+
+
+_DATA_RULES = re.compile(r"\b(stock|existencias?|inventario|estado|estatus|status|total|totales|monto|precio|saldo|activo|activa|inactivo|inactiva|"
+                         r"disponib\w*|cancelad\w*|aprobad\w*|registr\w*|duplicad\w*)\b")
+
+
+def data_reason(state: WorkflowState | None) -> str | None:
+    """Por qué conviene validar datos (HU-011): la HU tiene reglas sobre datos persistidos."""
+    story = state.artifacts.get("story") if state else None
+    if not story:
+        return None
+    text = fold(" ".join([*story.payload.get("business_rules", []), *(c.get("text", "") for c in story.payload.get("acceptance_criteria", []))]))
+    return "la historia tiene reglas de datos (stock, estados, totales o activo/inactivo)" if _DATA_RULES.search(text) else None
+
+
+def _verified_for_execution(state: WorkflowState) -> bool:
+    return any(state.artifacts.get(k) and state.artifacts[k].approved for k in ("automation", "data_validation"))
 
 
 def _stale(state: WorkflowState, artifact: str) -> bool:
@@ -82,6 +100,10 @@ def _ready(state: WorkflowState, requires: tuple[tuple[str, bool], ...]) -> tupl
 def _step(state: WorkflowState, key: str, hu: str, label: str, artifact: str | None, requires) -> dict[str, Any]:
     ready, why = _ready(state, requires)
     step: dict[str, Any] = {"key": key, "hu": hu, "label": label, "state": "pending", "ready": ready, "why": why}
+    if key == "execution":
+        # HU-010 ejecuta lo que el humano ya verificó: scripts o consultas de datos aprobados.
+        step["ready"] = _verified_for_execution(state)
+        step["why"] = None if step["ready"] else "Requiere scripts o consultas de datos aprobados."
     if key == "story_revision":
         invest = state.artifacts.get("invest")
         stories = [r for r in state.history if r.key == "story"] + ([state.artifacts["story"]] if "story" in state.artifacts else [])
@@ -158,9 +180,15 @@ def next_actions(state: WorkflowState, steps: list[dict[str, Any]]) -> list[dict
         step = by_key["approve_story"]
         add({"type": "approve", "artifact": "story", "label": f"Aprobar la HU v{step['version']}", "version": step["version"], "content_hash": step["content_hash"],
              "confirm_assumptions": step["assumptions"]})
-    for key in ("matrix", "risk", "automation", "execution", "pipeline", "performance_design", "azure_work_item"):
+    for key in ("matrix", "risk", "automation", "data_validation", "execution", "pipeline", "performance_design", "azure_work_item"):
         step = by_key[key]
         if step["state"] in {"pending", "stale", "failed"} and step["ready"]:
+            if key == "execution" and not _verified_for_execution(state):
+                continue
+            if key == "data_validation" and data_reason(state):
+                # HU-011: sugerida cuando la HU tiene reglas de datos (stock, estados, totales, activo o inactivo).
+                add({"type": "run", "goal": key, "label": RUN_LABELS[key] + " (sugerida)", "why": data_reason(state)})
+                continue
             if key == "performance_design" and performance_reason(state):
                 # HU-005 regla 6 / HU-008A: sugerida, sin forzar, por riesgo alto o requisitos de rendimiento.
                 add({"type": "input", "goal": key, "label": "Diseñar la prueba de performance (sugerida)", "why": performance_reason(state),
@@ -178,7 +206,7 @@ def next_actions(state: WorkflowState, steps: list[dict[str, Any]]) -> list[dict
         decide["label"] = "Revisar nuevas sugerencias INVEST (opcional)"
         add(decide)
     # Verificación humana (RT-02) de cada entregable generado: scripts antes del PR, pipeline, diseño de performance y Work Item.
-    for key, label in (("automation", "Verificar y aprobar los scripts (PR)"), ("pipeline", "Verificar y aprobar el pipeline (PR)"),
+    for key, label in (("automation", "Verificar y aprobar los scripts (PR)"), ("data_validation", "Verificar y aprobar las consultas de datos"), ("pipeline", "Verificar y aprobar el pipeline (PR)"),
                        ("performance_design", "Verificar y aprobar el diseño de performance"), ("azure_work_item", "Aprobar la publicación del Work Item")):
         record = state.artifacts.get(key)
         if record and not record.approved and not _stale(state, key):

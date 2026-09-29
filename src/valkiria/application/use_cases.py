@@ -200,12 +200,14 @@ class ValkiriaService:
     """Orquestador de casos de uso; mantiene el transporte fuera del dominio."""
 
     def __init__(self, llm, audit, metrics, stories, azure=None, max_parallel: int = 4, synthetic_app_base_url: str = "http://localhost:8090",
-                 web_runner=None, synthetic_transport=None):
+                 web_runner=None, synthetic_transport=None, database_executor=None):
         self.llm = llm
         # Ejecución de scripts (HU-010): app sintética, runner web opcional y transporte inyectable para pruebas.
         self.synthetic_app_base_url = synthetic_app_base_url
         self.web_runner = web_runner
         self.synthetic_transport = synthetic_transport
+        # HU-011: ejecutor seguro de la base sintética (análisis estático, solo perfiles sintéticos).
+        self.database_executor = database_executor
         # Límite de llamadas simultáneas al modelo (la matriz genera cada criterio en paralelo).
         self._parallel = asyncio.Semaphore(max_parallel)
         self.audit = audit

@@ -261,7 +261,7 @@ function scroll(){ thread.scrollTop = thread.scrollHeight; }
 // Todo lo que Valkiria hace sobre una historia, visible desde el inicio (el servidor envía el estado real de cada paso).
 const DEFAULT_STEPS = [['story','HU-003B','Historia de usuario'],['invest','HU-002','Evaluación INVEST'],['story_revision','HU-003A','Nueva versión con sugerencias'],
   ['approve_story','RT-02','Aprobación de la HU'],['matrix','HU-004','Matriz de pruebas'],['approve_matrix','RT-02','Aprobación de la matriz'],['risk','HU-005','Análisis de riesgo'],
-  ['automation','HU-009','Scripts de automatización'],['execution','HU-010','Ejecución de scripts (sintética)'],['pipeline','HU-007','Pipeline de Azure DevOps'],['performance_design','HU-008A','Diseño de prueba de performance'],
+  ['automation','HU-009','Scripts de automatización'],['data_validation','HU-011','Validación de datos (sintética)'],['execution','HU-010','Ejecución de scripts y datos (sintética)'],['pipeline','HU-007','Pipeline de Azure DevOps'],['performance_design','HU-008A','Diseño de prueba de performance'],
   ['azure_work_item','HU-006','Work Item de Azure DevOps (vista previa)']].map(([key, hu, label]) => ({key, hu, label, state:'pending', ready:false, why:null}));
 const STEP_STATE = { done: 'Hecho', action: 'Requiere tu decisión', stale: 'Desactualizado', failed: 'Falló', skipped: 'No aplica', pending: '' };
 function renderFlow(){
@@ -279,7 +279,7 @@ function renderFlow(){
   document.getElementById('steps').innerHTML = steps.map(st => {
     const isNext = next && ((next.goal && next.goal === st.key) || (next.type === 'approve' && ('approve_'+next.artifact) === st.key) || (next.type === 'decide_suggestions' && st.key === 'story_revision'));
     const cls = (isNext && st.state !== 'done') ? 'next' : st.state;
-    const verify = st.state === 'done' && st.version && st.approved === false && ['automation','pipeline','performance_design','azure_work_item'].includes(st.key);
+    const verify = st.state === 'done' && st.version && st.approved === false && ['automation','data_validation','pipeline','performance_design','azure_work_item'].includes(st.key);
     const sub = st.state === 'done' && st.version ? 'v'+st.version+(verify ? ' · pendiente de tu verificación' : st.approved ? ' · aprobado' : '') : (STEP_STATE[st.state] || (st.ready ? '' : (st.why || '')));
     const action = (f?.next || []).find(a => (a.goal === st.key) || (a.type === 'approve' && 'approve_'+a.artifact === st.key) || (a.type === 'decide_suggestions' && st.key === 'story_revision'));
     const btn = action ? '<button class="btn step-btn" data-i="'+(f.next.indexOf(action))+'">'+esc(action.label)+'</button>' : '';
@@ -401,10 +401,10 @@ function assistantTrace(a){
 }
 
 /* Artefactos del flujo */
-const APPROVABLE = ['story', 'matrix', 'automation', 'pipeline', 'performance_design', 'azure_work_item'];
+const APPROVABLE = ['story', 'matrix', 'automation', 'data_validation', 'pipeline', 'performance_design', 'azure_work_item'];
 function renderArtifact(a, changes){
   const r = { story: storyDoc, invest: renderInvest, matrix: renderMatrix, risk: renderRisk, automation: renderAutomation, pipeline: renderPipeline,
-              performance_design: renderPerformance, azure_work_item: renderWorkItem, database_validation: renderDbValidation, execution: renderExecution }[a.kind];
+              performance_design: renderPerformance, azure_work_item: renderWorkItem, database_validation: renderDbValidation, data_validation: renderDataValidation, execution: renderExecution }[a.kind];
   if(!r) return '';
   // Verificación humana (RT-02): cada entregable se aprueba o rechaza sobre la versión mostrada.
   const review = APPROVABLE.includes(a.kind) && !a.approved ? '<div class="doc-actions" style="border:none;background:none;padding:10px 0 0">'+
@@ -482,10 +482,20 @@ function renderExecution(a){
   const d = a.data, sm = d.summary || {};
   return head('Ejecución de scripts · '+esc(d.framework||'')+' ('+esc(d.platform||'')+') · app sintética', 'flask',
     ['<span class="chip ok">'+sm.passed+' aprobados</span>', '<span class="chip '+(sm.failed?'bad':'ok')+'">'+sm.failed+' fallidos</span>'])+
-    '<div class="tbl-wrap"><table class="grid"><thead><tr><th>Caso</th><th>Petición</th><th>Esperado</th><th>Obtenido</th><th>Resultado</th><th>ms</th></tr></thead><tbody>'+
-    (d.results||[]).map(r => '<tr><td class="mono">'+esc(r.case_id)+'</td><td class="mono">'+esc(r.request||'')+'</td><td>'+esc((r.expected_status||[]).join(' / '))+'</td><td>'+esc(r.status ?? '—')+
+    '<div class="tbl-wrap"><table class="grid"><thead><tr><th>Caso</th><th>Tipo</th><th>Petición</th><th>Esperado</th><th>Obtenido</th><th>Resultado</th><th>ms</th></tr></thead><tbody>'+
+    (d.results||[]).map(r => '<tr><td class="mono">'+esc(r.case_id)+'</td><td>'+esc(({api:'API', database:'Datos', web:'Web'})[r.kind]||r.kind||'')+'</td><td class="mono">'+esc(r.request||'')+'</td><td>'+esc((r.expected_status||[]).join(' / '))+'</td><td>'+esc(r.status ?? '—')+
       '</td><td><span class="chip '+((r.result||r.status)==='pass'?'ok':'bad')+'">'+((r.result||r.status)==='pass'?'Aprobado':'Fallido')+'</span></td><td>'+esc(r.duration_ms)+'</td></tr>').join('')+'</tbody></table></div>'+
     (d.report_id ? '<div class="doc-body"><a class="btn" href="'+API+'/v1/reports/'+encodeURIComponent(d.report_id)+'/download">Descargar evidencia (PDF)</a></div>' : '')+'</div>';
+}
+function renderDataValidation(a){
+  const qs = a.data.queries || [];
+  return head('Validación de datos (HU-011) · HU v'+a.data.story_version+' · matriz v'+a.data.matrix_version, 'database', ['<span class="chip">'+qs.length+' consulta(s)</span>', statusChip(a)])+
+    qs.map(q => '<div class="doc-body" style="border-top:1px solid var(--border-soft)"><div class="label">'+esc(q.id)+' · '+esc(q.purpose)+' <span class="chip '+(q.status==='lista'?'ok':'bad')+'">'+esc(q.status)+'</span></div>'+
+      '<div class="chips" style="margin:4px 0 8px">'+[q.criterion_id ? 'Criterio '+q.criterion_id : 'Sin criterio', q.case_id ? 'Caso '+q.case_id : 'Sin caso', q.expect==='empty' ? 'Cumple si no devuelve filas' : 'Cumple si devuelve filas'].map(x => '<span class="chip">'+esc(x)+'</span>').join('')+'</div>'+
+      '<div class="mono" style="color:var(--muted-2)">'+esc(q.sql)+'</div>'+(q.findings?.length ? '<div class="suggest">Bloqueada: '+q.findings.map(esc).join(', ')+'</div>' : '')+
+      (q.preview_rows !== undefined ? '<div class="suggest" style="color:'+(q.preview_matches?'var(--green)':'var(--amber)')+'">Hoy en la base sintética devuelve '+q.preview_rows+' fila(s): '+
+        (q.preview_matches ? 'coincide con lo esperado.' : 'NO coincide con lo esperado; revisa la consulta o su resultado esperado antes de aprobar.')+'</div>' : '')+'</div>').join('')+
+    (a.warnings?.length ? '<div class="doc-body"><div class="suggest">'+a.warnings.map(esc).join('<br>')+'</div></div>' : '')+'</div>';
 }
 function renderDbValidation(a){
   const qs = a.data.queries || [];

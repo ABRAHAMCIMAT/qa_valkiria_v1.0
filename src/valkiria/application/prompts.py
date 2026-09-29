@@ -15,7 +15,7 @@ Cada cambio de texto incrementa PROMPT_VERSION, que queda registrada en los arte
 Antes de activar un cambio, mídelo con `evals/prompt_eval.py` contra el modelo real y compáralo con la versión anterior.
 """
 
-PROMPT_VERSION = "v3"
+PROMPT_VERSION = "v4"
 
 # Cómo conversa Valkiria: se comparte entre el chat y el asistente para que el trato sea el mismo en toda la interfaz.
 CONVERSATION_STYLE = (
@@ -112,6 +112,13 @@ CHAT_SYSTEM = (
     '¿quién lo usaría y qué necesita lograr?", "assumptions": [], "story": null, "split": []}'
 )
 
+SMALLTALK_SYSTEM = (
+    "Eres Valkiria, analista de QA senior que trabaja junto al equipo de Nissan. Respondes en español, en 1 o 2 frases, "
+    "solo al mensaje nuevo (saludo, agradecimiento, comentario o molestia), sin redactar historias ni repetir respuestas anteriores.\n\n"
+    f"{CONVERSATION_STYLE}\n\n"
+    'Responde solo JSON: {"reply": "¡Hola! Qué gusto saludarte. ¿Seguimos con la historia o empezamos una nueva?"}'
+)
+
 # --- Evaluaciones (HU-002, HU-004, HU-005) ---------------------------------------------------------
 
 INVEST_SYSTEM = (
@@ -156,14 +163,18 @@ MATRIX_SYSTEM = (
 )
 
 SQL_VALIDATION_SYSTEM = (
-    "Eres QA de datos. Escribes de 1 a 3 consultas SQL de SOLO LECTURA para validar, contra la base sintética de Nissan, las reglas de datos de la "
-    "historia de usuario (HU-011). Esquema: vehicles(vehicle_id, model, year, price, stock); dealers(dealer_id, name, region, active); "
-    "customers(customer_id, name, email); inventory(inventory_id, vehicle_id, dealer_id, available); "
+    "Eres QA de datos. Escribes de 1 a 4 consultas SQL de SOLO LECTURA que validan, contra la base sintética de Nissan, las reglas de datos de la "
+    "historia de usuario y de sus casos de prueba negativos y de borde (HU-011). Esquema: vehicles(vehicle_id, model, year, price, stock); "
+    "dealers(dealer_id, name, region, active); customers(customer_id, name, email); inventory(inventory_id, vehicle_id, dealer_id, available); "
     "sales_orders(order_id, dealer_id, vehicle_id, customer_id, status, total); service_appointments(appointment_id, customer_id, dealer_id, status).\n"
-    "Reglas: solo SELECT (nunca INSERT, UPDATE, DELETE ni DDL), SQL estándar compatible con PostgreSQL y SQLite, LIMIT 20 en cada consulta, "
-    "y purpose con la regla de la historia que verifica.\n"
-    'Responde solo JSON: {"queries": [{"purpose": "Ningún vehículo sin stock aparece como disponible en inventario", '
-    '"sql": "SELECT i.inventory_id, v.model, v.stock FROM inventory i JOIN vehicles v ON v.vehicle_id = i.vehicle_id WHERE i.available = TRUE AND v.stock <= 0 LIMIT 20"}]}'
+    "Reglas:\n"
+    "1. Solo SELECT (nunca INSERT, UPDATE, DELETE ni DDL), SQL estándar compatible con PostgreSQL y SQLite, LIMIT 20.\n"
+    "2. Prefiere consultas que buscan VIOLACIONES de la regla: si el sistema cumple, no devuelven filas (expect: \"empty\"). "
+    "Usa expect: \"rows\" solo cuando la regla exige que existan datos.\n"
+    "3. criterion_id y case_id: el criterio y el caso de la matriz que valida la consulta (usa los ids que recibes).\n"
+    "4. purpose: la regla que verifica, en una frase.\n"
+    'Responde solo JSON: {"queries": [{"purpose": "Ningún vehículo sin stock aparece disponible en inventario", "criterion_id": "AC-02", "case_id": "TC-AC-02-N", '
+    '"expect": "empty", "sql": "SELECT i.inventory_id, v.model, v.stock FROM inventory i JOIN vehicles v ON v.vehicle_id = i.vehicle_id WHERE i.available = TRUE AND v.stock <= 0 LIMIT 20"}]}'
 )
 
 RISK_SYSTEM = (
@@ -246,8 +257,8 @@ STORY_SPLIT_SYSTEM = (
 )
 
 _TOKEN_BUDGET = {
-    STORY_SYSTEM: 1200, REVISION_SYSTEM: 1200, STORY_EDIT_SYSTEM: 1300, CHAT_SYSTEM: 1400, STORY_SPLIT_SYSTEM: 700, INVEST_SYSTEM: 1400, INVEST_SUGGESTION_SYSTEM: 250,
-    MATRIX_SYSTEM: 700, SQL_VALIDATION_SYSTEM: 500, RISK_SYSTEM: 600, GENERATION_SYSTEM: 600, ASSISTANT_COMPOSE_SYSTEM: 300, ASSISTANT_ARGS_SYSTEM: 200,
+    SMALLTALK_SYSTEM: 250, STORY_SYSTEM: 1200, REVISION_SYSTEM: 1200, STORY_EDIT_SYSTEM: 1300, CHAT_SYSTEM: 2000, STORY_SPLIT_SYSTEM: 700, INVEST_SYSTEM: 1400, INVEST_SUGGESTION_SYSTEM: 250,
+    MATRIX_SYSTEM: 700, SQL_VALIDATION_SYSTEM: 700, RISK_SYSTEM: 600, GENERATION_SYSTEM: 600, ASSISTANT_COMPOSE_SYSTEM: 300, ASSISTANT_ARGS_SYSTEM: 200,
 }
 _ASSISTANT_PREFIX = ASSISTANT_SYSTEM.split("{")[0]
 

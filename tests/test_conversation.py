@@ -69,11 +69,20 @@ def test_full_journey_through_every_capability():
     files = scripts["artifact"]["data"]["batches"][0]["scripts"]
     assert all(name.endswith("Test.java") for name in files) and all("given().baseUri" in code for code in files.values())
     early = chat.say("Ejecuta los scripts")
-    assert early["intent"] == "aclarar" and "aprob" in early["reply"]  # HU-010 exige la verificación humana antes
+    assert early["intent"] == "aclarar" and "verifiques" in early["reply"]  # HU-010 exige la verificación humana antes
+    data = chat.say("Valida los datos de la historia")
+    queries = data["artifact"]["data"]["queries"]
+    assert data["artifact"]["kind"] == "data_validation" and [q["status"] for q in queries] == ["lista", "lista", "bloqueada"]
+    assert queries[0]["case_id"] == "TC-AC-01-P" and queries[1]["expect"] == "empty"
+    assert queries[0]["preview_rows"] >= 1 and queries[0]["preview_matches"] and queries[1]["preview_matches"]  # lo que devuelve hoy, visible antes de aprobar
+    assert chat.say(type="approve", artifact="data_validation")["intent"] == "aprobar"  # verificación humana de las consultas
     assert chat.say(type="approve", artifact="automation")["intent"] == "aprobar"  # verificación humana antes del PR
     execution = chat.say("Ejecuta los scripts")
     summary = execution["artifact"]["data"]["summary"]
-    assert execution["artifact"]["kind"] == "execution" and summary["total"] == len(matrix["artifact"]["data"]["cases"]) and execution["artifact"]["data"]["report_id"]
+    assert execution["artifact"]["kind"] == "execution" and summary["api"] == len(matrix["artifact"]["data"]["cases"]) and summary["database"] == 2
+    assert execution["artifact"]["data"]["report_id"] and "consulta(s) de datos (HU-011)" in execution["reply"]
+    db_results = [r for r in execution["artifact"]["data"]["results"] if r["kind"] == "database"]
+    assert all(r["result"] == "pass" for r in db_results)  # la app sintética cumple ambas reglas de datos
     assert all(r["status"] is not None for r in execution["artifact"]["data"]["results"])  # llamadas reales a la app sintética
     report = chat.api.get(f"/v1/reports/{execution['artifact']['data']['report_id']}/download")
     assert report.status_code == 200 and report.headers["content-type"] == "application/pdf"
@@ -93,7 +102,7 @@ def test_full_journey_through_every_capability():
     done = chat.say("¿Qué sigue?")
     states = {s["key"]: s["state"] for s in done["flow"]["steps"]}
     print("ESTADOS", states, done["reply"])
-    assert all(states[k] == "done" for k in ("story", "invest", "story_revision", "approve_story", "matrix", "approve_matrix", "risk", "automation", "execution",
+    assert all(states[k] == "done" for k in ("story", "invest", "story_revision", "approve_story", "matrix", "approve_matrix", "risk", "automation", "data_validation", "execution",
                                              "pipeline", "performance_design", "azure_work_item"))
     assert "completo" in done["reply"]
 
@@ -132,7 +141,7 @@ def test_courtesy_mid_flow_never_restarts_the_story():
     llm = ScriptedLLM()
     chat = Chat(llm)
     started = chat.say("Necesito que los asesores consulten vehículos disponibles por concesionario")
-    llm.chat_response = {"intent": "crear", "reply": "¡De nada! Seguimos cuando quieras.", "assumptions": [], "story": {**STORY, "title": "Otra HU"}}
+    llm.smalltalk_reply = "¡De nada! Seguimos cuando quieras."
     thanks = chat.say("¡Gracias, muy bien!")
     assert thanks["intent"] == "conversar" and thanks["flow"]["workflow_id"] == started["flow"]["workflow_id"]
     assert thanks["flow"]["story"]["version"] == 1 and thanks["flow"]["story"]["title"] == STORY["title"]
@@ -179,7 +188,7 @@ def test_steps_that_need_approval_explain_the_dependency():
 
 def test_assumptions_are_confirmed_before_approving():
     llm = ScriptedLLM()
-    llm.chat_response = {"intent": "crear", "reply": "Redacté la historia.", "assumptions": ["El asesor ya inició sesión"], "story": STORY}
+    llm.story = {**STORY, "assumptions": ["El asesor ya inició sesión"]}
     chat = Chat(llm)
     chat.say("Necesito que los asesores consulten vehículos disponibles por concesionario")
     ask = chat.say("Apruebo la historia")
@@ -197,12 +206,10 @@ def test_policy_requests_mid_flow_are_refused_and_the_flow_continues():
 
 def test_broad_requirements_are_split_and_the_po_chooses():
     llm = ScriptedLLM()
-    llm.chat_response = {"intent": "dividir", "reply": "Te propongo dividirlo.", "assumptions": [], "story": None,
-                         "split": [{"title": "Consultar mis autos"}, {"title": "Agendar cita de servicio"}]}
+    llm.split_response = {"split": [{"title": "Consultar mis autos"}, {"title": "Agendar cita de servicio"}]}
     chat = Chat(llm)
     split = chat.say("Necesito un portal donde los clientes vean sus autos, agenden citas, paguen en línea y chateen con asesores")
     assert split["intent"] == "dividir" and [a["type"] for a in split["actions"]] == ["choose_split", "choose_split"]
-    llm.chat_response = None
     chosen = chat.say(type="choose_split", index=1)
     assert chosen["intent"] == "crear" and chosen["flow"]["story"]["version"] == 1
 
@@ -280,7 +287,7 @@ def test_database_validation_is_derived_from_the_story_and_read_only():
     result = chat.say(type="tool", name="validar_bd")
     queries = result["artifact"]["data"]["queries"]
     assert result["artifact"]["kind"] == "database_validation" and queries[0]["status"] == "completed" and queries[0]["row_count"] >= 1
-    assert queries[1]["status"] == "bloqueada"  # la mutación nunca se ejecuta (HU-011)
+    assert queries[2]["status"] == "bloqueada"  # la mutación nunca se ejecuta (HU-011)
     assert queries[0]["report_id"]  # evidencia descargable
 
 
@@ -332,3 +339,65 @@ def test_new_invest_suggestions_are_optional_once_the_story_is_approved():
     nxt = chat.say("¿Qué sigue?")
     assert nxt["artifact"]["kind"] == "matrix"
     assert any(a["label"] == "Revisar nuevas sugerencias INVEST (opcional)" for a in nxt["flow"]["next"])
+
+
+def test_data_validation_is_suggested_when_the_story_has_data_rules():
+    chat = Chat()  # la HU de prueba tiene la regla "Solo vehículos con stock"
+    chat.say("Necesito que los asesores consulten vehículos disponibles por concesionario")
+    after_matrix = chat.say(type="run", goal="matrix")
+    suggested = next(a for a in after_matrix["flow"]["next"] if a.get("goal") == "data_validation")
+    assert suggested["label"].endswith("(sugerida)") and "reglas de datos" in suggested["why"]
+
+
+def test_execution_can_run_only_verified_data_queries():
+    chat = Chat()
+    chat.say("Necesito que los asesores consulten vehículos disponibles por concesionario")
+    chat.say(type="run", goal="matrix")
+    chat.say(type="run", goal="data_validation")
+    chat.say(type="approve", artifact="data_validation")
+    run = chat.say("Ejecuta la validación")
+    summary = run["artifact"]["data"]["summary"]
+    assert run["artifact"]["kind"] == "execution" and summary == {"total": 2, "passed": 2, "failed": 0, "errors": 0, "api": 0, "database": 2, "web": 0}
+
+
+def test_web_scripts_with_data_queries_run_the_data_and_explain_the_web_part():
+    chat = Chat()
+    chat.say("Necesito que los asesores consulten vehículos disponibles por concesionario")
+    chat.say(type="run", goal="matrix")
+    chat.say("Genera los scripts en Playwright para web en el repositorio nissan-qa/web-tests")
+    chat.say(type="approve", artifact="automation")
+    chat.say(type="run", goal="data_validation")
+    chat.say(type="approve", artifact="data_validation")
+    run = chat.say("Ejecuta las pruebas")
+    assert run["artifact"]["data"]["summary"]["database"] == 2 and "Los scripts web no se ejecutaron" in run["reply"]
+
+
+def test_invalid_data_queries_are_corrected_before_asking_for_approval():
+    # Caso real en vivo: una consulta del modelo falló en la base sintética (columna inexistente).
+    llm = ScriptedLLM()
+    original = llm.generate_json
+    calls = {"n": 0}
+
+    async def sql_with_bad_column(*, system, user, schema):
+        from workflow_fakes import prompt_kind
+        if prompt_kind(system) == "sql" and calls["n"] == 0:
+            calls["n"] += 1
+            return {"queries": [{"purpose": "Stock por concesionario", "criterion_id": "AC-01", "case_id": "TC-AC-01-P", "expect": "rows",
+                                 "sql": "SELECT dealer_name, stock FROM vehicles LIMIT 20"}]}
+        return await original(system=system, user=user, schema=schema)
+
+    llm.generate_json = sql_with_bad_column
+    chat = Chat(llm)
+    chat.say("Necesito que los asesores consulten vehículos disponibles por concesionario")
+    chat.say(type="run", goal="matrix")
+    data = chat.say("Valida los datos de la historia")
+    query = data["artifact"]["data"]["queries"][0]
+    assert query["status"] == "lista" and query.get("corrected") and "dealer_name" not in query["sql"]
+
+
+def test_flow_steps_without_a_story_ask_for_the_requirement():
+    # Caso real en vivo: sin HU, "Genera los scripts…" terminó creando una "historia" sobre scripts.
+    chat = Chat()
+    for message in ("Genera la matriz de pruebas", "Genera los scripts en Postman para la API en el repositorio nissan-qa/api-tests", "Valida los datos de la historia"):
+        reply = chat.say(message)
+        assert reply["intent"] == "aclarar" and "primero necesito una historia" in reply["reply"] and reply["flow"]["workflow_id"] is None

@@ -319,7 +319,7 @@ def test_chat_routes_open_questions_to_the_assistant_and_keeps_the_session():
     api = api_with(llm)
     body = api.post("/v1/chat", json={"message": "¿Qué puedes hacer?"}).json()
     assert body["intent"] == "responder" and body["assistant"]["tools_used"] == ["capacidades"] and body["session_id"]
-    story = api.post("/v1/chat", json={"message": "Consultar vehículos por concesionario", "session_id": body["session_id"]}).json()
+    story = api.post("/v1/chat", json={"message": "Consultar vehículos disponibles por concesionario para los asesores", "session_id": body["session_id"]}).json()
     assert story["intent"] == "crear" and story["story"]
     session = api.get(f"/v1/memory/sessions/{body['session_id']}").json()
     assert len(session["turns"]) == 4 and session["facts"]["workflow_id"] == story["flow"]["workflow_id"]

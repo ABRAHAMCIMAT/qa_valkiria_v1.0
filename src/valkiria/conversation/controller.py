@@ -27,12 +27,19 @@ from valkiria.application.automation_execution import (
     export_test_cases_to_excel,
     static_analyse_database_script,
 )
-from valkiria.application.prompts import SQL_VALIDATION_SYSTEM, STORY_EDIT_SYSTEM
+from valkiria.application.prompts import (
+    SMALLTALK_SYSTEM,
+    SQL_VALIDATION_SYSTEM,
+    STORY_EDIT_SYSTEM,
+    STORY_SPLIT_SYSTEM,
+)
 from valkiria.application.script_generation import FRAMEWORKS as FRAMEWORK_NAMES
 from valkiria.application.use_cases import (
     ValkiriaService,
     _normalize_story,
+    _split_item,
     _story_changes,
+    looks_broad,
 )
 from valkiria.assistant.capabilities import policy_block
 from valkiria.assistant.routing import is_conversational, is_question, route_message
@@ -65,6 +72,7 @@ _APPROVE = re.compile(r"\b(apruebo|aprobada|aprobado|apruebala|aprueba la (histo
 _SUPPOSITIONS_OK = re.compile(r"\b(confirmo|confirmados|confirmo los supuestos|los supuestos (estan bien|son correctos)|acepto los supuestos)\b")
 _APPLY_ALL = re.compile(r"\b(aplica|aplicar|acepta|aceptar|acepto|aprueba|apruebo)\b.*\bsugerencias?\b")
 _COMMAND = re.compile(r"\b(genera|generar|generame|evalua|evaluar|evaluala|crea|crear|haz|hacer|ejecuta|ejecutar|disena|disenar|prepara|preparar|redacta|"
+                      r"valida|validar|verifica|verificar|deriva|derivar|corre|correr|"
                       r"calcula|analiza|analizar|arma|armar|construye|dame|quiero|necesito|puedes|podrias|sigue con|continua con|pasa a)\b")
 _RESUME = re.compile(r"^\s*(ninguna|ninguno|nada|sigamos|continuemos donde|volvamos|regresemos|olvidalo|dejalo asi|no,? sigamos|mejor sigamos)\b")
 _KEEP = re.compile(r"^\s*(ajusta|ajustala|la actual|actual|ajustar|modifica la actual|1)\b")
@@ -205,6 +213,11 @@ class _Turn:
         return await self.in_flow(message, text)
 
     async def first_contact(self, message: str) -> dict[str, Any]:
+        steps = [g for g in detect_goals(message) if g != "story"]
+        if steps and (_COMMAND.search(re.sub(r"^[^\w]+", "", fold(message))) or not is_question(message)):
+            # Un paso del flujo sin historia en curso: se explica la dependencia en lugar de inventar una HU sobre el pedido.
+            return {"intent": "aclarar", "reply": f"Para {RUN_LABELS.get(steps[0], LABELS.get(steps[0], steps[0])).lower()} primero necesito una historia de usuario. "
+                                                  "Cuéntame el requerimiento: quién lo usa, qué necesita hacer y qué resultado espera."}
         if route_message(message) == "assistant":
             return await self.ask(message)
         return await self.create_story(message)
@@ -281,21 +294,34 @@ class _Turn:
     # --- Creación y modificación de la historia ----------------------------------------------------------
 
     async def create_story(self, requirement: str, *, fresh: bool = False) -> dict[str, Any]:
-        recalled = await self.c.memory.recall(requirement, task="chat", namespace=self.namespace)
-        result = await self.c.service.converse(requirement, [], None, self.actor, memory=recall_prompt(recalled))
+        """HU-003B con tareas acotadas: aclarar si es vago, dividir si es amplio, redactar con el prompt dedicado."""
+        if len(re.findall(r"\w+", requirement)) < 5:
+            # Regla 3: si falta el actor, la acción o el resultado, se hacen hasta 2 preguntas concretas.
+            return {"intent": "conversar", "reply": "Con gusto lo convierto en una historia de usuario, pero necesito un poco más de detalle para no inventar: "
+                                                    "¿quién lo usaría y qué necesita lograr?"}
+        recalled = await self.c.memory.recall(requirement, task="story", namespace=self.namespace)
         memory_info = {"recalled": describe(recalled)}
-        if result.get("split"):
-            self.facts["split"] = result["split"]
-            return {"intent": "dividir", "reply": result["reply"], "split": result["split"], "memory": memory_info,
-                    "actions": [{"type": "choose_split", "index": i, "label": f"Redactar: {item['title']}"} for i, item in enumerate(result["split"])]}
-        if not result.get("story"):
-            return {"intent": "conversar", "reply": result["reply"], "memory": memory_info}
-        story = result["story"]
-        payload = {k: story[k] for k in ("id", "title", "description", "business_rules", "acceptance_criteria", "version") if k in story}
+        if looks_broad(requirement):
+            proposed = await self.c.service.llm.generate_json(system=STORY_SPLIT_SYSTEM, user=requirement, schema={"type": "object"})
+            split = [item for item in (_split_item(i) for i in (proposed.get("split") or [])[:5]) if item["title"]]
+            if len(split) >= 2:
+                self.facts["split"] = split
+                return {"intent": "dividir", "split": split, "memory": memory_info,
+                        "reply": (f"Este requerimiento abarca varias funcionalidades independientes, así que te propongo dividirlo en {len(split)} historias "
+                                  "para que cada una se pueda probar por separado (HU-003B). ¿Cuál quieres que redacte primero?"),
+                        "actions": [{"type": "choose_split", "index": i, "label": f"Redactar: {item['title']}"} for i, item in enumerate(split)]}
+        story, extras = await self.c.service.draft_story(requirement, self.actor, memory=recall_prompt(recalled))
+        payload = story.model_dump(mode="json", include={"id", "title", "description", "business_rules", "acceptance_criteria", "version"})
+        warnings = ([f"Requerimiento amplio: otras HU sugeridas: {'; '.join(extras['split'])}."] if extras["split"] else [])
         self.state, _ = await self.c.workflows.adopt_story(story=payload, requirement=requirement, actor=self.actor, namespace=self.namespace,
-                                                           assumptions=result.get("assumptions"), trace_id=self.trace_id)
+                                                           assumptions=extras["assumptions"], warnings=warnings, trace_id=self.trace_id)
         record = self.state.artifacts["story"]
-        reply = result["reply"] or f"Redacté la HU «{payload['title']}»."
+        reply = f"Redacté la HU «{story.title}» con {len(story.acceptance_criteria)} criterios de aceptación, como borrador para tu revisión."
+        if extras["assumptions"]:
+            reply += f" Tomé {len(extras['assumptions'])} supuesto(s) que deberás confirmar antes de aprobarla."
+        if extras["split"]:
+            reply += f" Cubrí el flujo principal; también sugiero como otras historias: {'; '.join(extras['split'])}."
+        reply += " ¿Quieres ajustar algo o seguimos con la evaluación INVEST?"
         return {"intent": "crear", "reply": reply, "story": record.payload, "artifact": self._artifact("story"), "assumptions": record.assumptions,
                 "memory": memory_info}
 
@@ -354,6 +380,12 @@ class _Turn:
         produced = [k for k, r in self.state.artifacts.items() if before.get(k) != r.version and k != "story"]
         if goal in self.state.failures:
             failure = self.state.failures[goal]
+            if failure.error_code == "execution_requires_verification":
+                pending = [k for k in ("automation", "data_validation") if k in self.state.artifacts and not self.state.artifacts[k].approved]
+                reply = failure.message + (" Tienes pendiente de verificar: " + ", ".join(_the(k) for k in pending) + "." if pending else
+                                           " Primero genera los scripts o las consultas de datos.")
+                return {"intent": "aclarar", "reply": reply, "actions": [{"type": "approve", "artifact": k, "label": f"Verificar y aprobar {_the(k)}"} for k in pending]
+                        or [{"type": "run", "goal": "data_validation", "label": RUN_LABELS["data_validation"]}]}
             if failure.error_code == "matrix_requires_split":
                 # HU-004 regla 2: con más de 10 criterios se sugiere dividir la HU; se ofrece hacerlo sin salir del flujo.
                 return {"intent": "aclarar", "reply": f"{failure.message} Te propongo reducir la HU a su flujo principal (máximo 6 criterios) como una nueva versión; "
@@ -477,6 +509,9 @@ class _Turn:
         if name == "exportar_matriz":
             return self.export_matrix()
         if name == "validar_bd":
+            # HU-011 dentro del flujo: con una HU y su matriz, las consultas son un paso versionado con verificación humana.
+            if self.state and "matrix" in self.state.artifacts:
+                return await self.run("data_validation", {})
             return await self.validate_database()
         if name in {"generar_pipeline_azure", "disenar_prueba_performance"}:
             goal = "pipeline" if name == "generar_pipeline_azure" else "performance_design"
@@ -591,14 +626,11 @@ class _Turn:
         return result
 
     async def chat(self, message: str) -> dict[str, Any]:
-        """Cortesía y comentarios: se conversa con el contexto del flujo y nunca se reinicia la historia."""
-        story = self.state.artifacts.get("story") if self.state else None
-        current = UserStory.model_validate(story.payload) if story else None
-        context = (f"ESTADO DEL FLUJO: {resume_line(flow_view(self.state))} Solo conversa: responde únicamente al mensaje nuevo, en 1 o 2 frases, "
-                   "sin repetir respuestas anteriores y sin redactar una historia nueva.") if self.state else ""
-        history = await self.c.memory.short_term.history(self.session_id)
-        result = await self.c.service.converse(message, history, current, self.actor, memory=context)
-        return {"intent": "conversar", "reply": result["reply"], "with_resume": False}
+        """Cortesía y comentarios: una respuesta breve con el contexto del flujo; nunca toca la historia."""
+        context = f"ESTADO DEL FLUJO: {resume_line(flow_view(self.state))}\n\n" if self.state else ""
+        data = await self.c.service.llm.generate_json(system=SMALLTALK_SYSTEM, user=f"{context}Mensaje nuevo del usuario:\n{message}", schema={"type": "object"})
+        reply = str(data.get("reply") or "").strip() or "¡Con gusto! ¿En qué te ayudo?"
+        return {"intent": "conversar", "reply": reply, "with_resume": False}
 
     # --- Utilidades ------------------------------------------------------------------------------------
 
@@ -651,8 +683,20 @@ class _Turn:
         if goal == "execution":
             summary = p["summary"]
             outcome = "todos aprobados" if summary["failed"] == 0 else f"{summary['failed']} fallido(s): revisa la evidencia"
-            return (f"{prefix}: ejecuté los {summary['total']} casos de {FRAMEWORK_NAMES.get(p.get('framework'), p.get('framework'))} contra la app sintética de Nissan "
-                    f"({summary['passed']} aprobados, {outcome}). La evidencia en PDF queda descargable.")
+            if summary.get("errors"):
+                outcome += f"; {summary['errors']} por error de consulta SQL, no por datos"
+            parts = [f"{summary['api']} caso(s) de API con {FRAMEWORK_NAMES.get(p.get('framework'), p.get('framework'))}" if summary.get("api") else "",
+                     f"{summary['database']} consulta(s) de datos (HU-011)" if summary.get("database") else "",
+                     f"{summary['web']} caso(s) web" if summary.get("web") else ""]
+            notes = [w for w in record.warnings if w.startswith(("Los scripts web", "Las consultas de datos no"))]
+            return (f"{prefix}: ejecuté contra el entorno sintético {' y '.join(x for x in parts if x) or 'lo verificado'}: {summary['passed']} de {summary['total']} "
+                    f"aprobados ({outcome}). La evidencia consolidada en PDF queda descargable." + (" " + " ".join(notes) if notes else ""))
+        if goal == "data_validation":
+            ready = [q for q in p["queries"] if q["status"] == "lista"]
+            blocked = len(p["queries"]) - len(ready)
+            return (f"{prefix}: derivé {len(p['queries'])} consulta(s) de solo lectura de las reglas de la HU v{p['story_version']} y de la matriz v{p['matrix_version']}"
+                    + (f"; {blocked} quedó bloqueada por el análisis estático" if blocked else "")
+                    + ". Cada una indica el criterio y el caso que valida, y qué debe devolver si el sistema cumple. Revísalas y apruébalas para ejecutarlas (HU-010).")
         if goal == "pipeline":
             return f"{prefix}: el YAML del pipeline referencia {len(p.get('scripts') or [])} script(s). Se entrega por pull request para revisión de DevOps."
         if goal == "performance_design":
@@ -665,7 +709,7 @@ class _Turn:
 
 def _the(artifact: str) -> str:
     return {"story": "la historia de usuario", "matrix": "la matriz de pruebas", "azure_work_item": "el Work Item de Azure DevOps", "invest": "la evaluación INVEST",
-            "automation": "los scripts de automatización", "execution": "la ejecución de los scripts", "pipeline": "el pipeline de Azure DevOps", "performance_design": "el diseño de la prueba de performance"}.get(
+            "automation": "los scripts de automatización", "execution": "la ejecución de los scripts", "data_validation": "las consultas de validación de datos", "pipeline": "el pipeline de Azure DevOps", "performance_design": "el diseño de la prueba de performance"}.get(
         artifact, LABELS.get(artifact, artifact).lower())
 
 

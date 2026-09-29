@@ -192,7 +192,7 @@ def create_app(llm=None, synthetic_transport=None):
     database_executor = build_synthetic_executor(settings.db_profile, settings.secret("synthetic_database_url")) if settings.mode == "synthetic" else None
     automation_runner = PlaywrightRunner(settings.automation_headless, settings.automation_timeout_seconds) if settings.automation_execute and settings.automation_runner == "playwright" else None
     service = ValkiriaService(llm, audit, metrics, stories, max_parallel=settings.llm_max_parallel, synthetic_app_base_url=settings.synthetic_app_base_url,
-                              web_runner=automation_runner, synthetic_transport=synthetic_transport)
+                              web_runner=automation_runner, synthetic_transport=synthetic_transport, database_executor=database_executor)
     memory = build_memory(settings.secret("memory_database_url") or settings.secret("workflow_database_url"), enabled=settings.memory_enabled,
                           max_turns=settings.memory_short_term_turns, ttl_minutes=settings.memory_short_term_ttl_minutes,
                           top_k=settings.memory_long_term_top_k, retention_days=settings.memory_long_term_retention_days)
@@ -289,7 +289,8 @@ def create_app(llm=None, synthetic_transport=None):
         except (LLMProviderError, TimeoutError) as exc:
             # RT-04: error claro con trace_id; la conversación y el flujo se conservan y se puede reintentar. La conversación no se rompe.
             event(logger, logging.WARNING, "chat_llm_no_disponible", trace_id=trace_id, error=getattr(exc, "code", type(exc).__name__))
-            reply = ("Disculpa, no pude procesar tu mensaje porque el modelo no respondió a tiempo. Tu conversación y la historia en curso se conservan; "
+            cause = "el modelo devolvió una respuesta incompleta" if getattr(exc, "code", "") == "llm_invalid_response" else "el modelo no respondió a tiempo"
+            reply = (f"Disculpa, no pude procesar tu mensaje porque {cause}. Tu conversación y la historia en curso se conservan; "
                      f"¿lo intentamos de nuevo? (Referencia: {trace_id})")
         # Frontera de la conversación: ningún error interno debe romper el chat ni exponer detalles.
         except Exception as exc:  # noqa: BLE001

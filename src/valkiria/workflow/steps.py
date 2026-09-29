@@ -17,9 +17,17 @@ from pydantic import ValidationError
 from valkiria.application.automation_execution import (
     build_evidence_report,
     create_automation_batch,
+    static_analyse_database_script,
 )
-from valkiria.application.automation_runner import execute_api_cases
-from valkiria.application.prompts import INVEST_SYSTEM, REVISION_SYSTEM
+from valkiria.application.automation_runner import (
+    execute_api_cases,
+    execute_data_queries,
+)
+from valkiria.application.prompts import (
+    INVEST_SYSTEM,
+    REVISION_SYSTEM,
+    SQL_VALIDATION_SYSTEM,
+)
 from valkiria.application.qa_artifacts import (
     MAX_AUTOMATION_BATCH,
     PolicyViolation,
@@ -32,6 +40,7 @@ from valkiria.application.use_cases import (
     _normalize_invest,
     _normalize_story,
     _story_changes,
+    matrix_user_prompt,
 )
 from valkiria.domain.models import InvestEvaluation, TestMatrix, UserStory
 from valkiria.memory.service import with_memory
@@ -210,30 +219,115 @@ async def run_automation(state: WorkflowState, service: ValkiriaService, memory:
                       f"{total} scripts {FRAMEWORK_NAMES.get(framework, framework)} ({platform}) en {len(batches)} lote(s), entrega solo por pull request.")
 
 
+async def run_data_validation(state: WorkflowState, service: ValkiriaService, memory: str = "") -> StepOutput:
+    """HU-011: consultas de solo lectura derivadas de la HU y de los casos negativos y de borde, ligadas a su criterio y caso."""
+    story, matrix = _story(state), state.artifacts["matrix"]
+    cases = [c for c in matrix.payload["cases"] if c.get("type") in {"negative", "edge"}][:12]
+    user = (matrix_user_prompt(story) + "\n\nCasos negativos y de borde de la matriz:\n"
+            + "\n".join(f"{c['id']} ({c['criterion_id']}, {c['type']}): {c['scenario']} → {c['expected_result']}" for c in cases))
+    data = await _generate(service, SQL_VALIDATION_SYSTEM, with_memory(user, memory), {"type": "object"})
+    ids = {c["id"] for c in matrix.payload["cases"]}
+    criteria = {c.id for c in story.acceptance_criteria}
+    queries = []
+    for n, raw in enumerate(q for q in (data.get("queries") or [])[:4] if isinstance(q, dict)):
+        sql = str(raw.get("sql") or "").strip().rstrip(";")
+        analysis = static_analyse_database_script(sql, "postgresql") if sql else {"passed": False, "statement_type": "empty", "findings": ["consulta vacía"]}
+        read_only = sql.lower().startswith("select") and analysis["statement_type"] == "read_only" and analysis["passed"]
+        queries.append({"id": f"DV-{n + 1:02d}", "purpose": str(raw.get("purpose") or "Validación de datos"), "sql": sql,
+                        "criterion_id": raw.get("criterion_id") if raw.get("criterion_id") in criteria else None,
+                        "case_id": raw.get("case_id") if raw.get("case_id") in ids else None,
+                        "expect": "rows" if str(raw.get("expect", "")).lower() == "rows" else "empty",
+                        "status": "lista" if read_only else "bloqueada", "findings": [] if read_only else (analysis.get("findings") or ["no es de solo lectura"])})
+    if service.database_executor is not None:
+        # Validación previa: cada consulta de solo lectura se prueba en la base sintética antes de pedir la aprobación humana;
+        # si falla (columna inexistente, sintaxis), se pide una corrección con el error concreto.
+        for query in (q for q in queries if q["status"] == "lista"):
+            error = await _preflight(service, query["sql"], state.trace_id, query)
+            if error:
+                fixed = await _generate(service, SQL_VALIDATION_SYSTEM, f"Esta consulta falló con {error}. Corrígela usando solo tablas y columnas del esquema; "
+                                        f"conserva su propósito ({query['purpose']}):\n{query['sql']}", {"type": "object"})
+                candidate = next((str(q.get("sql") or "").strip().rstrip(";") for q in fixed.get("queries") or [] if isinstance(q, dict)), "") or str(fixed.get("sql") or "").strip().rstrip(";")
+                analysis = static_analyse_database_script(candidate, "postgresql") if candidate else {"passed": False, "statement_type": "empty"}
+                if candidate.lower().startswith("select") and analysis["passed"] and analysis["statement_type"] == "read_only" and not await _preflight(service, candidate, state.trace_id, query):
+                    query |= {"sql": candidate, "corrected": True}
+                else:
+                    query |= {"status": "inválida", "findings": [f"falló en la base sintética: {error}"]}
+    if not any(q["status"] == "lista" for q in queries):
+        raise StepError("data_validation_invalid", "El modelo no produjo consultas de solo lectura válidas.", retryable=True)
+    warnings = ["Consultas de solo lectura sobre la base sintética; se ejecutan en HU-010 después de tu verificación."]
+    blocked = [q["id"] for q in queries if q["status"] == "bloqueada"]
+    if blocked:
+        warnings.append(f"Bloqueadas por el análisis estático (no se ejecutarán): {', '.join(blocked)}.")
+    # Lo que la consulta devuelve HOY en la base sintética: ayuda al humano a detectar un resultado esperado mal planteado antes de aprobar.
+    mismatched = [q["id"] for q in queries if "preview_rows" in q and ((q["expect"] == "empty") == bool(q["preview_rows"]))]
+    for query in queries:
+        if "preview_rows" in query:
+            query["preview_matches"] = query["id"] not in mismatched
+    if mismatched:
+        warnings.append(f"Hoy fallarían en la base sintética: {', '.join(mismatched)}. Revisa si es un defecto de datos o si la consulta o su resultado esperado no reflejan la regla.")
+    invalid = [q["id"] for q in queries if q["status"] == "inválida"]
+    if invalid:
+        warnings.append(f"Inválidas en la base sintética aun después de una corrección (no se ejecutarán): {', '.join(invalid)}.")
+    untraced = [q["id"] for q in queries if not q["case_id"]]
+    if untraced:
+        warnings.append(f"Sin caso de la matriz asociado: {', '.join(untraced)}; asígnalo al revisar.")
+    return StepOutput({"queries": queries, "story_version": state.artifacts["story"].version, "matrix_version": matrix.version},
+                      _versions(state, "story", "matrix"), warnings, f"{sum(q['status'] == 'lista' for q in queries)} consulta(s) de datos listas para verificar.")
+
+
+async def _preflight(service: ValkiriaService, sql: str, trace_id: str, preview: dict | None = None) -> str | None:
+    """Prueba una consulta de solo lectura en la base sintética; devuelve el tipo de error o None si corre (y anota cuántas filas devuelve hoy)."""
+    outcome, _ = await asyncio.to_thread(service.database_executor.execute, script=sql, case_id="HU-011-preflight", trace_id=trace_id, output_format="pdf")
+    if outcome.get("status") == "completed" and preview is not None:
+        preview["preview_rows"] = len(outcome.get("rows") or [])
+    return None if outcome.get("status") == "completed" else str(outcome.get("error_type") or outcome.get("status"))
+
+
 async def run_execution(state: WorkflowState, service: ValkiriaService, memory: str = "") -> StepOutput:
-    """HU-010: ejecución controlada de los scripts aprobados contra la app sintética, con evidencia por caso."""
-    automation = state.artifacts["automation"]
-    platform, framework = automation.payload.get("platform", "web"), automation.payload.get("framework", "playwright")
-    cases = [case for batch in automation.payload["batches"] for case in batch.get("cases", [])]
-    if platform == "api":
-        results = await execute_api_cases(cases, base_url=service.synthetic_app_base_url, transport=service.synthetic_transport)
-    elif service.web_runner is not None:
-        results = await service.web_runner.run(base_url=service.synthetic_app_base_url, cases=cases)
-    else:
-        raise StepError("web_execution_unavailable", "La app sintética de Nissan es una API sin interfaz web, así que los scripts web no tienen contra qué ejecutarse en "
-                        "este entorno. Regenera los scripts con un stack de API (Playwright, RestAssured o Postman-Newman) para ejecutarlos aquí, o ejecuta los "
-                        "scripts web en tu pipeline contra la interfaz real.", retryable=False)
+    """HU-010: ejecución unificada de lo que el humano verificó — scripts de API y consultas de datos (HU-011) — con evidencia consolidada."""
+    automation, data = state.artifacts.get("automation"), state.artifacts.get("data_validation")
+    approved_scripts = automation if automation and automation.approved else None
+    approved_data = data if data and data.approved else None
+    if not approved_scripts and not approved_data:
+        raise StepError("execution_requires_verification", "Para ejecutar necesito que verifiques y apruebes los scripts o las consultas de datos (RT-02).", retryable=False)
+    results: list[dict[str, Any]] = []
+    notes: list[str] = []
+    platform = framework = None
+    if approved_scripts:
+        platform, framework = approved_scripts.payload.get("platform", "web"), approved_scripts.payload.get("framework", "playwright")
+        cases = [case for batch in approved_scripts.payload["batches"] for case in batch.get("cases", [])]
+        if platform == "api":
+            results += await execute_api_cases(cases, base_url=service.synthetic_app_base_url, transport=service.synthetic_transport)
+        elif service.web_runner is not None:
+            results += [{**r, "kind": "web"} for r in await service.web_runner.run(base_url=service.synthetic_app_base_url, cases=cases)]
+        elif not approved_data:
+            raise StepError("web_execution_unavailable", "La app sintética de Nissan es una API sin interfaz web, así que los scripts web no tienen contra qué ejecutarse en "
+                            "este entorno. Regenera los scripts con un stack de API (Playwright, RestAssured o Postman-Newman) para ejecutarlos aquí, o ejecuta los "
+                            "scripts web en tu pipeline contra la interfaz real.", retryable=False)
+        else:
+            notes.append("Los scripts web no se ejecutaron: no hay interfaz web ni runner habilitado en este entorno.")
+    if approved_data:
+        if service.database_executor is None:
+            notes.append("Las consultas de datos no se ejecutaron: la base sintética no está configurada en este entorno.")
+        else:
+            results += await execute_data_queries(approved_data.payload["queries"], executor=service.database_executor, trace_id=state.trace_id)
     passed = sum(r.get("result", r.get("status")) == "pass" for r in results)
-    execution_id = f"HU-010-{automation.version}-{state.id[:8]}"
-    report = build_evidence_report(execution_id=execution_id, title="Valkiria · Evidencia de ejecución de scripts (HU-010)", output_format="pdf",
-                                   fields={"historia": state.artifacts["story"].payload.get("title"), "stack": f"{framework} ({platform})",
-                                           "casos": len(results), "aprobados": passed, "fallidos": len(results) - passed, "trace_id": state.trace_id},
-                                   logs=[f"{r['case_id']} {r.get('request', '')} -> {r.get('status')} esperado {r.get('expected_status', '')} ({r.get('result', '')})" for r in results])
-    warnings = ["Ejecución en el entorno sintético, nunca en producción."]
+    by_kind = {kind: sum(r.get("kind") == kind for r in results) for kind in ("api", "database", "web")}
+    execution_id = f"HU-010-{state.id[:8]}-{(automation.version if automation else 0)}-{(data.version if data else 0)}"
+    report = build_evidence_report(execution_id=execution_id, title="Valkiria · Evidencia de ejecución (HU-010 / HU-011)", output_format="pdf",
+                                   fields={"historia": state.artifacts["story"].payload.get("title"), "stack": f"{framework} ({platform})" if framework else "solo datos",
+                                           "casos_api": by_kind["api"], "consultas_datos": by_kind["database"], "casos_web": by_kind["web"],
+                                           "aprobados": passed, "fallidos": len(results) - passed, "trace_id": state.trace_id},
+                                   logs=[f"{r['case_id']} [{r.get('kind')}] {r.get('request', '')} -> {r.get('status')} esperado {r.get('expected_status', '')} ({r.get('result', '')})"
+                                         for r in results])
+    warnings = ["Ejecución en el entorno sintético, nunca en producción.", *notes]
     if passed < len(results):
         warnings.append(f"{len(results) - passed} caso(s) fallidos: revisa la evidencia antes de integrar el pull request.")
-    return StepOutput({"platform": platform, "framework": framework, "results": results, "summary": {"total": len(results), "passed": passed, "failed": len(results) - passed},
-                       "report": report}, _versions(state, "automation"), warnings, f"{passed} de {len(results)} casos aprobados en la ejecución sintética.")
+    based_on = {k: v for k, v in {"automation": approved_scripts.version if approved_scripts else None, "data_validation": approved_data.version if approved_data else None}.items() if v}
+    return StepOutput({"platform": platform, "framework": framework, "results": results, "report": report,
+                       "summary": {"total": len(results), "passed": passed, "failed": len(results) - passed, "errors": sum(r.get("result") == "error" for r in results), **by_kind}},
+                      based_on, warnings,
+                      f"{passed} de {len(results)} casos aprobados en la ejecución sintética.")
 
 
 RUN_COMMANDS = {"playwright": "npx playwright test", "selenium": "pytest tests", "restassured": "mvn -B test",
@@ -289,6 +383,7 @@ EXECUTORS = {
     "matrix": run_matrix,
     "risk": run_risk,
     "automation": run_automation,
+    "data_validation": run_data_validation,
     "execution": run_execution,
     "pipeline": run_pipeline,
     "performance_design": run_performance_design,
