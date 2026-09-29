@@ -81,7 +81,10 @@ class WorkflowPlan:
         for artifact in self.pending_approvals:
             record = state.artifacts.get(artifact)
             if record:
-                actions.append({"type": "approve", "artifact": artifact, "version": record.version, "content_hash": record.content_hash, "why": f"Otras tareas requieren la versión {record.version} de '{artifact}' aprobada."})
+                action = {"type": "approve", "artifact": artifact, "version": record.version, "content_hash": record.content_hash, "why": f"Otras tareas requieren la versión {record.version} de '{artifact}' aprobada."}
+                if record.assumptions:
+                    action["confirm_assumptions"] = record.assumptions  # HU-003B, regla 4
+                actions.append(action)
         for name in self.missing_inputs:
             actions.append({"type": "provide_input", "param": name, "question": INPUT_QUESTIONS.get(name, name)})
         for step in self.steps:

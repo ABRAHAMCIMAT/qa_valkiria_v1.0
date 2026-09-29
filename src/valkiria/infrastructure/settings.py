@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     llm_api_key: SecretStr | None = None
     # Azure OpenAI con llave: "api-key". Ollama, vLLM, OpenAI o Azure OpenAI con Entra ID: "authorization".
     llm_auth_header: Literal["authorization", "api-key"] = "authorization"
+    # RT-04: tiempo máximo de respuesta del modelo.
+    llm_timeout_seconds: float = Field(default=60, gt=0, le=600)
     allowed_origins: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["http://localhost:3000"])
     mode: str = "synthetic"
     environment: str = "qa"

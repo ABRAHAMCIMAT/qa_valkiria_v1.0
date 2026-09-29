@@ -15,7 +15,7 @@ Ejecutada en macOS con Python 3.12.2 y Docker 29.8.1, con el código ya integrad
 | Docker daemon | `docker info` | Activo (Docker Desktop 29.8.1) |
 | Ruff | `ruff check src tests` | Sin errores |
 | Bandit | `bandit -q -c pyproject.toml -r src` | Sin hallazgos |
-| Unitarias | `pytest -q --ignore=tests/e2e` | 135 aprobadas (aisladas del `.env` local mediante `tests/conftest.py`) |
+| Unitarias | `pytest -q --ignore=tests/e2e` | 153 aprobadas (aisladas del `.env` local mediante `tests/conftest.py`) |
 | E2E sintética | `RUN_SYNTHETIC_E2E=1 pytest -v tests/e2e` | 5 aprobadas contra PostgreSQL 16 (flujo de la app sintética y mutaciones con límite); repetibles |
 | Paquete | `python -m build` | `valkiria-0.5.0-py3-none-any.whl` y `valkiria-0.5.0.tar.gz`; el wheel se instala y arranca en un entorno limpio |
 | Imagen Docker | `docker build -f deploy/docker/Dockerfile .` | 303 MB, usuario `uid=10001`, healthcheck activo |
@@ -63,6 +63,33 @@ Ejecutada en macOS con Python 3.12.2 y Docker 29.8.1, con el código ya integrad
 | Memoria en PostgreSQL real | Persiste tras reiniciar, redacta, deduplica y recupera |
 | Integración en vivo con Llama 3.2 | Chat: pregunta con herramienta, creación de HU y ajuste usando solo la sesión. Flujo: aprendió la HU aprobada y las preferencias del PO, y el siguiente flujo las usó. Una pregunta dentro del flujo se respondió con `estado_flujo`. Orquestador: el seguimiento heredó la intención y la pregunta se resolvió con el agente `assistant` |
 | Batería de 13 peticiones fuera del flujo, 2 corridas | 26 de 26 correctas: 22 con la herramienta o skill adecuada y 4 rechazos honestos; ver [Asistente](asistente.md#validación-con-llama-32-instruct) |
+
+## System prompts v2
+
+Evaluación con `evals/prompt_eval.py` contra `llama3.2:3b-instruct-q4_K_M` real. Se comparan los prompts v1 y v2 con los mismos casos; v2 se midió con 3 muestras por caso. Se mide la salida cruda del modelo y, donde el código completa o garantiza una regla, también el resultado final.
+
+| Tarea | Métrica | v1 | v2 |
+|---|---|---|---|
+| Historia (HU-003B) | De 3 a 6 criterios Dado/Cuando/Entonces y "Como/quiero/para" | 88 % | 100 % |
+| INVEST (HU-002) | Resultado final sin hallazgos (tras completar sugerencias faltantes) | 17 % | 100 % |
+| INVEST | Sin sugerencias en criterios que cumplen | 17 % | 100 % |
+| INVEST | Detecta una HU que no es pequeña ni testeable | 0 % | 100 % |
+| Matriz (HU-004) | Sin hallazgos y cobertura completa | 0 % | 100 % |
+| Riesgo (HU-005) | Puntuación, justificación y mitigación válidas; una HU enorme no queda en riesgo bajo | 100 % | 100 % |
+| Revisión (HU-003A) | Aplica lo aprobado y conserva el resto | 100 % | 100 % |
+| Chat | Intención correcta | 80 % | 97 % |
+| Chat | Propone dividir un requerimiento amplio (HU-003B, regla 2) | 0 % | 100 % |
+| Chat | Tono: saluda, agradece o se disculpa según el caso | 75 % | 100 % |
+| Chat | Respuestas no secas | 75 % | 97 % |
+| Generación | Claves obligatorias | 0 % | 100 % |
+| Asistente | 19 peticiones fuera del flujo, incluidas 6 nuevas | 89 % | 95 % |
+
+Notas:
+- **Matriz:** la mejora viene de la lista explícita de casos que el código entrega al modelo. Con esa lista, el prompt v1 también llega a 100 %; sin ella, 0 %.
+- **INVEST:** Llama 3.2 omite el campo `suggestion` al evaluar los seis criterios a la vez (0 % en la salida cruda con ambas versiones). El código pide la sugerencia faltante con una tarea acotada (`INVEST_SUGGESTION_SYSTEM`), y el resultado final cumple HU-002 en el 100 % de los casos.
+- **Chat:** en el 56 % de los casos de crear o ajustar, el modelo entrega la HU completa directamente (v1: 67 %). En los demás, el código la regenera con `STORY_SYSTEM` y limpia la respuesta, así que la persona siempre recibe la HU.
+- **Asistente:** el único caso que falló en v2 (herramienta de automatización móvil) se corrigió después. El código extrae de la petición los valores cerrados, solo envía los datos obligatorios al forzar una herramienta y descarta los borradores escritos antes de consultar. Verificado 3 de 3 contra el modelo.
+- 153 pruebas unitarias, incluidas `tests/test_business_rules.py` y las regresiones de cada falla real del modelo.
 
 ## Resuelto: gates de agentes que comparten fase
 

@@ -6,6 +6,7 @@ from typing import Any
 import httpx
 
 from valkiria.infrastructure.logging import event, get_logger
+from valkiria.memory.text import redact
 
 
 class LLMProviderError(RuntimeError):
@@ -17,7 +18,8 @@ class LLMProviderError(RuntimeError):
 
 
 class OpenAICompatibleLLM:
-    def __init__(self, base_url: str, model_name: str, api_key: str | None = None, timeout_seconds: float = 90, auth_header: str = "authorization"):
+    # RT-04: si el modelo no responde en 60 s, el usuario recibe un error claro y puede reintentar.
+    def __init__(self, base_url: str, model_name: str, api_key: str | None = None, timeout_seconds: float = 60, auth_header: str = "authorization"):
         self.base_url = base_url.rstrip("/")
         self.model_name = model_name
         self.api_key = api_key
@@ -35,7 +37,9 @@ class OpenAICompatibleLLM:
 
     async def generate_json(self, *, system: str, user: str, schema: dict[str, Any]) -> dict[str, Any]:
         headers = self._auth_headers()
-        payload = {"model": self.model_name, "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}], "temperature": 0.1, "response_format": {"type": "json_object"}}
+        # RT-05: credenciales, tokens y correos no se envían al modelo aunque el usuario los escriba.
+        payload = {"model": self.model_name, "messages": [{"role": "system", "content": system}, {"role": "user", "content": redact(user)}], "temperature": 0.1,
+                   "response_format": {"type": "json_object"}}
         try:
             async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
                 response = await client.post(f"{self.base_url}/chat/completions", json=payload, headers=headers)

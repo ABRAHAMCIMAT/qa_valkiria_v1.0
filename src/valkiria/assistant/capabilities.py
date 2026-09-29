@@ -70,17 +70,21 @@ def capability_summary(toolbox: ToolBox) -> dict[str, list[str]]:
 
 def honest_unsupported(request: str, *, missing: str | None, reason: str | None, toolbox: ToolBox, closest: list[Tool] | None = None,
                        alternative: str | None = None) -> str:
-    what = missing.strip().rstrip(".") if missing and missing.strip() else "resolver esta petición con mis herramientas"
-    lines = [f"No tengo la capacidad de {what}."]
-    if reason:
-        lines.append(reason.strip())
+    # Tono de colega: se reconoce el límite con honestidad, se explica por qué y se ofrece lo que sí es posible.
+    if missing and missing.strip():
+        lines = [f"Lo siento, no tengo la capacidad de {missing.strip().rstrip('.')}." + (f" {reason.strip()}" if reason else "")]
+    elif reason:
+        # Una falla temporal (el modelo no respondió) no es una falta de capacidad: se dice tal cual.
+        lines = [f"Lo siento, no pude resolver tu petición en este momento. {reason.strip()} Puedes intentarlo de nuevo en un momento."]
+    else:
+        lines = ["Lo siento, eso no está dentro de lo que puedo hacer."]
     if alternative:
         lines.append(alternative)
     related = closest if closest is not None else toolbox.closest(request)
     if related:
-        lines.append("\nLo más cercano que sí puedo hacer:")
+        lines.append("\nLo más cercano en lo que sí puedo ayudarte:")
         lines += [f"- {t.title}: {t.description}" for t in related]
     others = [t.title for t in toolbox.all() if t not in (related or [])]
-    lines.append(("\nTambién puedo: " if related else "\nLo que sí puedo hacer: ") + "; ".join(others) + ".")
-    lines.append("Y el flujo por historia completo: HU, INVEST, matriz de pruebas, riesgo, scripts, pipeline, diseño de performance y vista previa de Work Item.")
+    lines.append(("\nTambién puedo ayudarte con: " if related else "\nLo que sí puedo hacer: ") + "; ".join(others) + ".")
+    lines.append("Y con el flujo completo de una historia: HU, INVEST, matriz de pruebas, riesgo, scripts, pipeline, diseño de performance y vista previa de Work Item. ¿Te ayudo con alguna de estas?")
     return "\n".join(lines)

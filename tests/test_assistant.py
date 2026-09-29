@@ -67,7 +67,7 @@ async def test_invalid_tool_and_arguments_are_reported_back_to_the_model():
         {"accion": "usar_herramienta", "herramienta": "herramienta_bd", "argumentos": {"motor": "oracle"}},
         {"accion": "responder", "respuesta": "Para Oracle usa la herramienta sugerida."},
     ]
-    answer = await assistant_for(llm).ask("¿Qué herramienta uso para probar Oracle?")
+    answer = await assistant_for(llm).ask("¿Qué herramienta uso para probar la base de datos del inventario?")
     assert "no existe" in answer.steps[0].error
     assert "debe ser uno de" in answer.steps[1].error
     assert answer.steps[2].observation and answer.tools_used == ["herramienta_bd"]
@@ -79,7 +79,7 @@ async def test_declares_honestly_what_it_cannot_do_and_lists_alternatives():
     llm.assistant_script = [{"razon": "Ninguna herramienta reserva viajes", "accion": "no_puedo", "falta": "reservar vuelos"}]
     answer = await assistant_for(llm).ask("Reserva un vuelo a Cancún")
     assert answer.status == "unsupported" and answer.missing_capability == "reservar vuelos"
-    assert answer.answer.startswith("No tengo la capacidad de reservar vuelos.")
+    assert answer.answer.startswith("Lo siento, no tengo la capacidad de reservar vuelos.")
     assert "Lo que sí puedo hacer:" in answer.answer and "Inventario Nissan" in answer.answer
     assert answer.capabilities["limites"]
 
@@ -211,6 +211,44 @@ def test_template_placeholders_count_as_missing_arguments():
     assert tool.validate({"plataforma": "móvil", "herramienta": "<herramienta>"}) == {"plataforma": "móvil"}
 
 
+async def test_missing_required_data_is_requested_not_invented():
+    # HU-008A, regla 3: sin SLA definidos, se piden antes de generar.
+    llm = ScriptedLLM()
+    llm.assistant_script = [{"accion": "usar_herramienta", "herramienta": "disenar_prueba_performance", "argumentos": {"usuarios": 100, "duracion_segundos": 300}},
+                            {"accion": "no_puedo"}]
+    llm.args_script = [{"usuarios": 100, "duracion_segundos": 300}]
+    answer = await assistant_for(llm).ask("Diseña una prueba de carga para 100 usuarios durante 5 minutos")
+    assert answer.status == "answered" and "el SLA" in answer.answer and answer.answer.endswith("?")
+    assert "performance_plan" not in answer.outputs and UNGROUNDED_NOTE not in answer.answer
+
+
+async def test_closed_values_are_extracted_from_the_request_not_from_the_model():
+    # Caso real (v2): el modelo omitió "móvil" y se terminó pidiendo un dato que el usuario ya había dado.
+    llm = ScriptedLLM()
+    llm.assistant_script = [{"accion": "usar_herramienta", "herramienta": "herramienta_automatizacion", "argumentos": {}},
+                            {"accion": "responder", "respuesta": "Para móvil usa Appium con JavaScript."}]
+    answer = await assistant_for(llm).ask("¿Qué herramienta de automatización uso para una app móvil?")
+    assert answer.tools_used == ["herramienta_automatizacion"] and answer.steps[0].arguments == {"plataforma": "mobile"}
+
+
+async def test_criteria_questions_use_the_glossary_verbatim():
+    # Caso real (v2): "¿Cuáles son los criterios INVEST?" no se reconocía como conceptual y el modelo inventó los criterios.
+    llm = ScriptedLLM()
+    llm.assistant_script = [{"accion": "responder", "respuesta": "INVEST significa Investigación, Implementación…"}]
+    answer = await assistant_for(llm).ask("¿Cuáles son los criterios INVEST?")
+    assert answer.tools_used == ["glosario_qa"] and answer.mode == "tool"
+    assert "Independiente, Negociable, Valiosa, Estimable, Pequeña y Testeable" in answer.answer and "Investigación" not in answer.answer
+
+
+async def test_an_answer_written_before_any_tool_is_never_the_final_answer():
+    # Caso real (v2): respondió "Appium, Espresso o JUnit" de memoria; al forzar la herramienta, ese borrador no debe sobrevivir.
+    llm = ScriptedLLM()
+    llm.assistant_script = [{"accion": "responder", "respuesta": "Usa Appium, Espresso o JUnit."}, {"accion": "responder", "respuesta": "Usa Appium, Espresso o JUnit."}]
+    llm.args_script = [{"plataforma": "móvil", "herramienta": "espresso"}]
+    answer = await assistant_for(llm).ask("¿Qué herramienta de automatización uso para una app móvil?")
+    assert answer.tools_used == ["herramienta_automatizacion"] and "Espresso" not in answer.answer and "appium" in answer.answer
+
+
 def test_missing_capability_text_is_not_duplicated():
     from valkiria.assistant.agent import _clean_missing
     assert _clean_missing("la capacidad de interactuar con sistemas externos.") == "interactuar con sistemas externos"
@@ -257,7 +295,7 @@ async def test_model_outage_falls_back_to_a_direct_tool_or_an_honest_limit():
     answer = await assistant.ask("¿Qué capacidades tienes?")
     assert answer.mode == "deterministic" and answer.tools_used == ["capacidades"]
     unsupported = await assistant.ask("Traduce este poema al japonés")
-    assert unsupported.status == "unsupported" and "No tengo la capacidad" in unsupported.answer
+    assert unsupported.status == "unsupported" and "no pude resolver tu petición en este momento" in unsupported.answer
 
 
 async def test_skills_produce_artifacts_for_the_interface():

@@ -2,6 +2,33 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/).
 
+## 2026-09-29 — System prompts v2: reglas de negocio de las HU y conversación natural
+
+### Añadido
+- `src/valkiria/application/prompts.py`: todos los prompts centralizados y versionados (`PROMPT_VERSION = "v2"`). Aplican las reglas de HU-002, 003A/B, 004, 005 y 008A, y comparten una guía de conversación: tono de colega, saludos, disculpas, límites amables y máximo 2 preguntas.
+- `evals/prompt_eval.py`: evaluación reproducible contra el modelo real, con comparación entre versiones (`--prompts`). Resultados en `docs/estado-validacion.md`. Documentación en `docs/prompts.md`.
+- Reglas garantizadas en código:
+  - **HU-005:** puntuación de 1 a 5 por dimensión y nivel derivado de la suma.
+  - **HU-003B:**
+    - división de requerimientos amplios en el chat, con elección de la HU;
+    - supuestos que se confirman antes de aprobar (`assumptions_confirmed`);
+    - HU adicionales sugeridas como advertencia.
+  - **HU-002:** sugerencias faltantes completadas con una tarea acotada.
+  - **HU-004:** lista explícita de casos requeridos.
+  - **HU-008A:** los datos obligatorios faltantes, como el SLA, se piden y no se inventan.
+- **RT-04:** tiempo límite de 60 s (`VALKIRIA_LLM_TIMEOUT_SECONDS`). El chat nunca se rompe: ante una falla responde con `trace_id` y la opción de reintentar.
+- **RT-05:** el texto se redacta antes de enviarlo al modelo.
+- **RT-06:** cada artefacto registra el modelo y la versión del prompt.
+- Chat:
+  - saludos, agradecimientos y molestias se responden conversando;
+  - se usa el resumen de turnos antiguos;
+  - la interfaz muestra la división de HU y la opción de reintentar.
+- Asistente:
+  - extracción determinista de valores cerrados;
+  - preguntas de aclaración;
+  - glosario literal para conceptos;
+  - negativas amables que distinguen una falla temporal de una capacidad inexistente.
+
 ## 2026-09-29 — Memoria corta y larga, y asistente de razonamiento con herramientas
 
 ### Añadido

@@ -28,6 +28,20 @@ _TOOL_ORDER = re.compile(
 _EDIT_VERB = re.compile(r"\b(agrega|anade|quita|cambia|ajusta|redacta|modifica|precisa|elimina)")
 
 
+# Cortesía, agradecimientos y retroalimentación: se responden conversando, como lo haría un colega, no con herramientas.
+_CONVERSATIONAL = re.compile(
+    r"^\s*(hola|buen[oa]?s?\s+(dias|tardes|noches)|saludos|que tal|como estas|como te va|gracias|muchas gracias|mil gracias|adios|hasta luego|hasta pronto|"
+    r"nos vemos|ok|okay|vale|va|perfecto|excelente|genial|listo|de acuerdo|entendido|muy bien|buen trabajo|me gusta|no me gusta|no entiendes|"
+    r"eso no|esta mal|no es lo que|no sirve|que buena|te equivocaste|disculpa|perdon)\b"
+)
+
+
+def is_conversational(text: str) -> bool:
+    # "¡Gracias!", "¿Hola?": los signos de apertura no deben ocultar la cortesía.
+    folded = re.sub(r"^[^\w]+", "", fold(text).strip())
+    return bool(_CONVERSATIONAL.search(folded)) and len(folded.split()) <= 14 and not policy_block(text)
+
+
 def is_question(text: str) -> bool:
     return "?" in text or bool(_QUESTION_START.search(fold(text)))
 

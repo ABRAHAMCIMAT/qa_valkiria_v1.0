@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -19,6 +20,7 @@ from valkiria.application.qa_artifacts import (
 from valkiria.assistant.capabilities import LIMITS, capability_summary
 from valkiria.assistant.glossary import GLOSSARY, lookup
 from valkiria.assistant.tools import Param, Summary, Tool, ToolBox, ToolContext
+from valkiria.memory.text import fold
 from valkiria.workflow.validators import MAX_CRITERIA_PER_MATRIX
 
 if TYPE_CHECKING:
@@ -148,7 +150,7 @@ def build_toolbox(*, service: ValkiriaService | None, memory: MemoryService | No
     box.register(Tool("capacidades", "tool", "Capacidades de Valkiria", "Lista lo que Valkiria puede y no puede hacer.", capacidades,
                       keywords=("puedes", "capacidad", "ayuda", "funciones", "hacer")))
     box.register(Tool("politicas", "tool", "Políticas y límites", "Reglas de seguridad y límites de calidad (casos, lotes, SQL, producción).", politicas,
-                      keywords=("politica", "regla", "limite", "seguridad", "produccion", "permitido")))
+                      keywords=("politica", "regla", "limite", "maximo", "minimo", "caso", "criterio", "lote", "matriz", "seguridad", "produccion", "permitido")))
     box.register(Tool("glosario_qa", "tool", "Glosario de QA", "Definiciones verificadas de conceptos de QA: tipos de prueba, INVEST, técnicas de diseño de casos, SLA.", glosario,
                       (Param("termino", "string", "concepto a definir, por ejemplo 'prueba de estrés'"),), ("que es", "diferencia", "concepto", "definicion", "prueba", "significa", "tipo")))
     box.register(Tool("inventario_nissan", "tool", "Inventario Nissan (sintético)", "Vehículos, precios, stock y ubicación por concesionario en la app sintética.", inventario,
@@ -161,10 +163,14 @@ def build_toolbox(*, service: ValkiriaService | None, memory: MemoryService | No
                                                                                                     choices=("postgresql", "oracle", "sqlserver", "mysql"))),
                       ("sql", "script", "query", "update", "delete", "seguro", "base de datos")))
     box.register(Tool("herramienta_bd", "tool", "Herramienta de pruebas de BD", "Recomienda framework y estructura para probar una base de datos.", herramienta_bd,
-                      (Param("motor", "string", "motor", choices=("postgresql", "oracle", "sqlserver", "mysql")), Param("lenguaje", "string", "lenguaje", required=False, choices=("python", "java", "node")),
+                      (Param("motor", "string", "motor", choices=("postgresql", "oracle", "sqlserver", "mysql"), ask="el motor de base de datos (PostgreSQL, Oracle, SQL Server o MySQL)",
+                             extract=engine_from),
+                       Param("lenguaje", "string", "lenguaje", required=False, choices=("python", "java", "node"), extract=language_from),
                        Param("ambiente", "string", "ambiente", required=False, choices=("development", "integration", "qa", "staging"))), ("base de datos", "framework", "prueba", "bd")))
     box.register(Tool("herramienta_automatizacion", "tool", "Herramienta de automatización", "Elige lenguaje y herramienta compatibles para web, móvil, API, escritorio o BD.", herramienta_automatizacion,
-                      (Param("plataforma", "string", "web, mobile, api, desktop o database"), Param("herramienta", "string", "herramienta preferida", required=False)),
+                      (Param("plataforma", "string", "web, mobile, api, desktop o database", ask="la plataforma (web, móvil, API, escritorio o base de datos)",
+                             extract=platform_from),
+                       Param("herramienta", "string", "herramienta preferida", required=False)),
                       ("automatizacion", "playwright", "selenium", "appium", "api", "movil", "web", "herramienta")))
     box.register(Tool("buscar_memoria", "tool", "Memoria del equipo", "Busca HU aprobadas, preferencias del PO, correcciones y lecciones anteriores.", buscar_memoria,
                       (Param("consulta", "string", "qué buscar"),), ("antes", "anterior", "recuerda", "memoria", "aprobada", "preferencia", "leccion")))
@@ -178,7 +184,9 @@ def build_toolbox(*, service: ValkiriaService | None, memory: MemoryService | No
                           (Param("peticion", "string", "qué se necesita"), Param("objetivos", "string", "capacidades separadas por coma: story, invest, matrix, risk, automation, pipeline", required=False)),
                           ("flujo", "matriz", "invest", "riesgo", "scripts", "completo")))
     box.register(Tool("disenar_prueba_performance", "skill", "Diseño de prueba de performance", "Diseña un escenario para Azure Load Testing (JMeter o Locust), sin ejecutarlo.", performance,
-                      (Param("usuarios", "integer", "usuarios concurrentes"), Param("duracion_segundos", "integer", "duración en segundos"), Param("sla_ms", "integer", "SLA p95 en ms"),
+                      (Param("usuarios", "integer", "usuarios concurrentes", ask="cuántos usuarios concurrentes"),
+                       Param("duracion_segundos", "integer", "duración en segundos", ask="la duración de la prueba"),
+                       Param("sla_ms", "integer", "SLA p95 en ms", ask="el SLA: tiempo de respuesta p95 objetivo en milisegundos"),
                        Param("herramienta", "string", "jmeter o locust", required=False, choices=("jmeter", "locust")),
                        Param("tipo", "string", "tipo de prueba", required=False, choices=("load", "stress", "spike", "soak"))), ("performance", "rendimiento", "carga", "estres", "jmeter", "locust", "usuarios")))
     box.register(Tool("generar_pipeline_azure", "skill", "Pipeline de Azure DevOps", "Genera el YAML base del pipeline de pruebas (HU-007).", pipeline,
@@ -186,6 +194,26 @@ def build_toolbox(*, service: ValkiriaService | None, memory: MemoryService | No
     for name, summarize in SUMMARIZERS.items():
         box.attach(name, summarize)
     return box
+
+
+# --- Extracción determinista de valores cerrados (no depende del modelo) -------------------------------
+
+def _first(text: str, table: dict[str, str]) -> str | None:
+    folded = fold(text)
+    return next((value for pattern, value in table.items() if re.search(pattern, folded)), None)
+
+
+def platform_from(text: str) -> str | None:
+    return _first(text, {r"\b(movil|mobile|android|ios|app movil|aplicacion movil)\b": "mobile", r"\b(api|rest|servicio web|endpoint)\b": "api",
+                         r"\b(escritorio|desktop|windows)\b": "desktop", r"\b(base de datos|bd|sql)\b": "database", r"\b(web|navegador|portal|sitio)\b": "web"})
+
+
+def engine_from(text: str) -> str | None:
+    return _first(text, {r"\b(postgres|postgresql)\b": "postgresql", r"\boracle\b": "oracle", r"\bsql ?server\b": "sqlserver", r"\bmysql\b": "mysql"})
+
+
+def language_from(text: str) -> str | None:
+    return _first(text, {r"\bjava\b": "java", r"\b(node|javascript|typescript)\b": "node", r"\bpython\b": "python"})
 
 
 # --- Conclusiones verificables por herramienta (ver `Summary`) ---------------------------------------
@@ -209,7 +237,8 @@ def _sum_politicas(r: dict[str, Any]) -> Summary:
 def _sum_glosario(r: dict[str, Any]) -> Summary:
     if not r.get("resultados"):
         return Summary("El concepto no está en el glosario verificado de Valkiria.", verbatim=True)
-    return Summary("\n".join(f"- {x['termino'].capitalize()}: {x['definicion']}" for x in r["resultados"]), tuple(x["termino"].split()[-1] for x in r["resultados"][:2]))
+    # Definiciones verificadas, tal cual: parafrasearlas con un modelo pequeño les resta precisión.
+    return Summary("Según el glosario de QA de Valkiria:\n" + "\n".join(f"- {x['termino'].capitalize()}: {x['definicion']}" for x in r["resultados"]), verbatim=True)
 
 
 def _sum_inventario(r: dict[str, Any]) -> Summary:

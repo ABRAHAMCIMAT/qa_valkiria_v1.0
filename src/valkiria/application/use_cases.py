@@ -1,5 +1,16 @@
 from __future__ import annotations
 
+import re
+
+from valkiria.application.prompts import (
+    CHAT_SYSTEM,
+    INVEST_SUGGESTION_SYSTEM,
+    INVEST_SYSTEM,
+    MATRIX_SYSTEM,
+    PROMPT_VERSION,
+    RISK_SYSTEM,
+    STORY_SYSTEM,
+)
 from valkiria.domain.models import (
     ArtifactType,
     InvestEvaluation,
@@ -9,56 +20,6 @@ from valkiria.domain.models import (
 )
 from valkiria.llmops.lifecycle import Gate, LLMOpsLifecycle, Phase
 from valkiria.memory.service import with_memory
-
-STORY_SHAPE = (
-    '{"title": "título breve", "description": "Como <rol>, quiero <acción>, para <beneficio>.", '
-    '"business_rules": ["regla"], "acceptance_criteria": [{"id": "AC-01", "text": "Dado ..., cuando ..., entonces ..."}]}'
-)
-
-STORY_SYSTEM = (
-    "Eres analista de QA senior. Redacta en español una historia de usuario clara y verificable. "
-    "Incluye de 3 a 6 criterios de aceptación en formato Dado/Cuando/Entonces y solo reglas de negocio justificadas por el requerimiento. "
-    f"Responde únicamente con un objeto JSON con esta forma: {STORY_SHAPE}"
-)
-
-CHAT_SYSTEM = (
-    "Eres Valkiria, analista de QA senior que trabaja junto al equipo. Conversas en español de forma natural y profesional, "
-    "como un colega: mantienes el hilo de la conversación y la historia de usuario en curso.\n"
-    "Decide la intención del mensaje nuevo:\n"
-    "- \"crear\": describe un requerimiento o funcionalidad nueva. Redacta una historia nueva con 3 a 6 criterios de aceptación en formato Dado/Cuando/Entonces.\n"
-    "- \"ajustar\": pide explícitamente cambiar, agregar, quitar o precisar algo de la historia actual. Devuelve la historia COMPLETA actualizada, conservando lo que no se pidió cambiar.\n"
-    "- \"conversar\": pregunta, comentario, saludo, o un requerimiento tan ambiguo que redactarlo obligaría a inventar. "
-    "Si el usuario pregunta por qué o pide una explicación sin pedir un cambio, también es \"conversar\": explica tu razonamiento con base en el requerimiento. "
-    "Haz 1 o 2 preguntas concretas si falta información.\n"
-    "Reglas para \"reply\": de 2 a 4 frases en primera persona; explica qué entendiste y qué hiciste, en pasado (\"Redacté…\", \"Agregué…\"), y en un ajuste qué cambió respecto a la versión anterior; "
-    "cierra con un siguiente paso concreto (evaluar INVEST, generar la matriz de pruebas o evaluar el riesgo) o con una pregunta. "
-    "No copies la historia ni su descripción en \"reply\" (la interfaz ya la muestra); no uses emojis ni markdown.\n"
-    "\"assumptions\": supuestos que tomaste por falta de información (máximo 3, lista vacía si no hubo).\n"
-    "\"story\": null cuando la intención es \"conversar\".\n"
-    'Responde únicamente con JSON: {"intent": "crear|ajustar|conversar", "reply": "...", "assumptions": ["..."], '
-    f'"story": {STORY_SHAPE}}}'
-)
-
-INVEST_SYSTEM = (
-    "Eres analista de QA senior. Evalúa la historia de usuario con INVEST, criterio por criterio, en español. "
-    "Usa exactamente estos seis nombres: Independiente, Negociable, Valiosa, Estimable, Pequeña, Testeable. "
-    "status solo puede ser \"cumple\", \"parcial\" o \"no_cumple\". Da una justificación breve y una sugerencia accionable cuando no cumpla por completo. "
-    'Responde únicamente con JSON: {"criteria": [{"name": "Independiente", "status": "cumple", "justification": "...", "suggestion": "..."}]}'
-)
-
-MATRIX_SYSTEM = (
-    "Eres analista de QA senior. Diseña en español una matriz de pruebas para la historia: casos positivos, negativos y de borde, "
-    "con al menos un caso positive, uno negative y uno edge por cada criterio de aceptación, y máximo 30 casos en total (HU-004). "
-    "Cada caso debe usar el id exacto de su criterio en criterion_id. type solo puede ser positive, negative o edge; priority: high, medium o low. "
-    'Responde únicamente con JSON: {"cases": [{"id": "TC-01", "criterion_id": "AC-01", "scenario": "...", "preconditions": ["..."], '
-    '"steps": ["..."], "data": {}, "expected_result": "...", "priority": "high", "type": "positive"}]}'
-)
-
-RISK_SYSTEM = (
-    "Eres analista de QA senior. Evalúa en español el riesgo de calidad de la historia considerando complejidad, dependencias y criticidad de negocio. "
-    "level solo puede ser low, medium o high. No bloquees el trabajo de QA: la mitigación debe ser práctica. "
-    'Responde únicamente con JSON: {"level": "medium", "justification": "...", "mitigation": "..."}'
-)
 
 
 def _text(value) -> str:
@@ -129,10 +90,58 @@ def _normalize_matrix(data: dict) -> dict:
 _RISK_LEVELS = {"alto": "high", "alta": "high", "medio": "medium", "media": "medium", "bajo": "low", "baja": "low"}
 
 
+RISK_DIMENSIONS = ("complejidad", "dependencias", "criticidad")
+
+
+def risk_level(total: int) -> str:
+    """HU-005, regla 2: bajo de 3 a 6, medio de 7 a 11, alto de 12 a 15."""
+    return "low" if total <= 6 else "medium" if total <= 11 else "high"
+
+
+def _score(value) -> int | None:
+    try:
+        return min(5, max(1, int(round(float(value)))))
+    except (TypeError, ValueError):
+        return None
+
+
 def _normalize_risk(data: dict) -> dict:
     risk = data.get("risk") if isinstance(data.get("risk"), dict) else data
     level = str(risk.get("level") or risk.get("risk_level") or "medium").strip().lower()
-    return {"level": _RISK_LEVELS.get(level, level), "justification": _text(risk.get("justification") or risk.get("reason") or ""), "mitigation": _text(risk.get("mitigation") or "")}
+    raw_scores = risk.get("scores") if isinstance(risk.get("scores"), dict) else risk
+    scores = {name: _score(raw_scores.get(name)) for name in RISK_DIMENSIONS}
+    result = {"level": _RISK_LEVELS.get(level, level), "justification": _text(risk.get("justification") or risk.get("reason") or ""), "mitigation": _text(risk.get("mitigation") or "")}
+    if all(value is not None for value in scores.values()):
+        # El nivel se calcula con la regla de negocio, no se toma del modelo: así siempre es consistente con las puntuaciones.
+        total = sum(scores.values())
+        result |= {"scores": scores, "score_total": total, "level": risk_level(total)}
+    return result
+
+
+def _split_item(item) -> dict:
+    if isinstance(item, dict):
+        return {"title": _text(item.get("title") or item.get("titulo") or "").strip(), "description": _text(item.get("description") or item.get("descripcion") or "").strip()}
+    return {"title": _text(item).strip(), "description": ""}
+
+
+def matrix_user_prompt(story: UserStory) -> str:
+    """La historia más la lista exacta de casos que exige HU-004: un modelo pequeño cumple mejor una lista que una regla que debe calcular."""
+    slots = [f"TC-{c.id}-{suffix} ({c.id}, {kind})" for c in story.acceptance_criteria for suffix, kind in (("P", "positive"), ("N", "negative"), ("E", "edge"))]
+    return (story.model_dump_json(include={"title", "description", "business_rules", "acceptance_criteria"})
+            + f"\n\nGenera exactamente estos {len(slots)} casos, uno por línea de esta lista:\n" + "\n".join(slots))
+
+
+def _clean_reply(reply: str) -> str:
+    """La historia se muestra aparte: si el modelo la pegó en reply (JSON o "Aquí está el resultado:"), se quita."""
+    cleaned = re.sub(r"\{.*\}", "", reply, flags=re.DOTALL)
+    cleaned = re.sub(r"(?i)\s*(aqu[ií] est[aá] (el resultado|la historia)[^.:]*[:.]?)\s*$", "", cleaned.strip())
+    return cleaned.strip()
+
+
+def story_extras(data: dict) -> dict:
+    assumptions = [_text(a).strip() for a in _as_list(data.get("assumptions")) if _text(a).strip()][:3]
+    split = [_text(s).strip() for s in _as_list(data.get("split")) if _text(s).strip()][:5]
+    return {"assumptions": assumptions, "split": split}
 
 
 def _story_changes(before: UserStory, after: UserStory) -> dict:
@@ -153,6 +162,12 @@ class ValkiriaService:
         self.azure = azure
         self.ops = LLMOpsLifecycle(audit, metrics)
 
+    def _context(self, actor: str):
+        # La versión de los prompts queda en cada ejecución para poder comparar resultados entre versiones.
+        ctx = self.ops.new_context(actor, self.llm.model_name)
+        ctx.prompt_version = PROMPT_VERSION
+        return ctx
+
     async def _ground(self, ctx):
         await self.ops.record_gate(ctx, Gate.G1, "passed", {"result": "input_validated_and_policy_loaded"})
 
@@ -161,7 +176,12 @@ class ValkiriaService:
         await self.ops.record_gate(ctx, Gate.G5, "skipped", {"reason": reason})
 
     async def create_story(self, req: str, actor: str, *, memory: str = "") -> UserStory:
-        ctx = self.ops.new_context(actor, self.llm.model_name)
+        story, _ = await self.draft_story(req, actor, memory=memory)
+        return story
+
+    async def draft_story(self, req: str, actor: str, *, memory: str = "") -> tuple[UserStory, dict]:
+        """HU-003B: la HU más sus supuestos (regla 3, máximo 3) y otras HU sugeridas si el requerimiento es amplio (regla 2, máximo 5)."""
+        ctx = self._context(actor)
         await self.ops.start(ctx, "create_story", ArtifactType.STORY)
         try:
             await self._ground(ctx)
@@ -172,14 +192,14 @@ class ValkiriaService:
             await self._skip_human_release_gates(ctx, "el caso de uso solo genera un borrador")
             await self.ops.metric(ctx, "generation.success", 1, "count")
             await self.ops.finish(ctx)
-            return story
+            return story, story_extras(data)
         except Exception:
             await self.ops.finish(ctx, "failed")
             raise
 
     async def converse(self, message: str, history: list[dict], current: UserStory | None, actor: str, *, memory: str = "") -> dict:
         """Turno conversacional: mantiene el hilo y decide si crear, ajustar la historia actual o solo responder."""
-        ctx = self.ops.new_context(actor, self.llm.model_name)
+        ctx = self._context(actor)
         await self.ops.start(ctx, "converse", ArtifactType.STORY)
         try:
             await self._ground(ctx)
@@ -191,11 +211,19 @@ class ValkiriaService:
             context.append(f"Mensaje nuevo del usuario:\n{message}")
             data = await self.llm.generate_json(system=CHAT_SYSTEM, user="\n\n".join(context), schema=UserStory.model_json_schema())
             intent = str(data.get("intent", "conversar")).strip().lower()
+            if intent not in {"crear", "ajustar", "dividir", "conversar"}:
+                intent = "conversar"
             if intent == "ajustar" and not current:
                 intent = "crear"
-            reply = str(data.get("reply") or "").strip()
+            reply = _clean_reply(str(data.get("reply") or ""))
             assumptions = [_text(a) for a in _as_list(data.get("assumptions")) if _text(a).strip()][:3]
-            story, changes = None, None
+            story, changes, split = None, None, []
+            if intent == "dividir":
+                # HU-003B, regla 2: un requerimiento amplio se propone dividido (máximo 5 HU) y el PO elige cuáles crear.
+                split = [_split_item(item) for item in _as_list(data.get("split"))][:5]
+                split = [item for item in split if item["title"]]
+                if len(split) < 2:
+                    intent, split = "crear", []
             if intent in {"crear", "ajustar"}:
                 fields = _normalize_story(data.get("story") if isinstance(data.get("story"), dict) else {})
                 if intent == "crear" and len(fields["acceptance_criteria"]) < 3:
@@ -216,24 +244,28 @@ class ValkiriaService:
                 await self.stories.save(story)
                 await self.ops.record(ctx, Phase.GENERATION, "converse", "draft_updated" if changes else "draft_created", ArtifactType.STORY, str(story.id), story.version)
             if not reply:
-                reply = "Listo." if story else "¿Me das un poco más de contexto sobre lo que necesitas?"
+                reply = ("Listo." if story else "Este requerimiento abarca varias historias; te propongo dividirlo. ¿Cuál quieres que redacte primero?" if split
+                         else "¿Me das un poco más de contexto sobre lo que necesitas?")
+            if split and "?" not in reply:
+                reply += " ¿Cuál quieres que redacte primero?"
             if story and "?" not in reply:
                 # Mantiene el hilo: toda entrega de historia termina proponiendo el siguiente paso.
                 reply += " ¿Seguimos con la evaluación INVEST de esta versión o quieres ajustar algo más?" if changes else " ¿Quieres ajustar algo o seguimos con la evaluación INVEST?"
             await self._skip_human_release_gates(ctx, "el caso de uso solo genera un borrador conversacional")
             await self.ops.finish(ctx)
-            return {"intent": intent, "reply": reply, "assumptions": assumptions, "story": story.model_dump(mode="json") if story else None, "changes": changes}
+            return {"intent": intent, "reply": reply, "assumptions": assumptions, "story": story.model_dump(mode="json") if story else None, "changes": changes, "split": split}
         except Exception:
             await self.ops.finish(ctx, "failed")
             raise
 
     async def evaluate_invest(self, story: UserStory, actor: str, *, memory: str = "") -> InvestEvaluation:
-        ctx = self.ops.new_context(actor, self.llm.model_name)
+        ctx = self._context(actor)
         await self.ops.start(ctx, "evaluate_invest", ArtifactType.INVEST)
         try:
             await self._ground(ctx)
             data = await self.llm.generate_json(system=INVEST_SYSTEM, user=with_memory(story.model_dump_json(), memory), schema=InvestEvaluation.model_json_schema())
             data = _normalize_invest(data)
+            await self._complete_suggestions(story, data["criteria"])
             data.update(story_id=story.id, model=self.llm.model_name, prompt_version=ctx.prompt_version)
             result = InvestEvaluation.model_validate(data)
             await self.ops.record(ctx, Phase.EVALUATION, "invest", "completed", ArtifactType.INVEST, str(result.id))
@@ -244,12 +276,26 @@ class ValkiriaService:
             await self.ops.finish(ctx, "failed")
             raise
 
+    async def _complete_suggestions(self, story: UserStory, criteria: list[dict]) -> None:
+        """HU-002, regla 2: todo criterio parcial o no cumplido lleva una sugerencia accionable.
+
+        Un modelo pequeño suele omitir el campo al evaluar los seis criterios a la vez; pedir solo la sugerencia faltante,
+        con la justificación como contexto, es una tarea más acotada y la cumple.
+        """
+        body = story.model_dump_json(include={"title", "description", "business_rules", "acceptance_criteria"})
+        for criterion in criteria:
+            if criterion.get("status") in {"parcial", "no_cumple"} and not str(criterion.get("suggestion") or "").strip():
+                user = f"Historia:\n{body}\n\nCriterio: {criterion['name']} ({criterion['status']}). Justificación: {criterion.get('justification') or 'sin justificación'}"
+                data = await self.llm.generate_json(system=INVEST_SUGGESTION_SYSTEM, user=user, schema={"type": "object"})
+                suggestion = _text(data.get("suggestion") or data.get("sugerencia") or "").strip()
+                criterion["suggestion"] = suggestion or None
+
     async def generate_matrix(self, story: UserStory, actor: str, *, memory: str = "") -> TestMatrix:
-        ctx = self.ops.new_context(actor, self.llm.model_name)
+        ctx = self._context(actor)
         await self.ops.start(ctx, "generate_matrix", ArtifactType.TEST_MATRIX)
         try:
             await self._ground(ctx)
-            data = await self.llm.generate_json(system=MATRIX_SYSTEM, user=with_memory(story.model_dump_json(), memory), schema=TestMatrix.model_json_schema())
+            data = await self.llm.generate_json(system=MATRIX_SYSTEM, user=with_memory(matrix_user_prompt(story), memory), schema=TestMatrix.model_json_schema())
             data = _normalize_matrix(data)
             data.update(story_id=story.id)
             result = TestMatrix.model_validate(data)
@@ -262,7 +308,7 @@ class ValkiriaService:
             raise
 
     async def assess_risk(self, story: UserStory, actor: str, defect_history: list[dict] | None = None, *, memory: str = "") -> RiskAssessment:
-        ctx = self.ops.new_context(actor, self.llm.model_name)
+        ctx = self._context(actor)
         await self.ops.start(ctx, "assess_risk", ArtifactType.RISK)
         try:
             await self._ground(ctx)

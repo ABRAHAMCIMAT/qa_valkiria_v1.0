@@ -19,6 +19,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from valkiria.application.prompts import PROMPT_VERSION
 from valkiria.application.qa_artifacts import PolicyViolation
 from valkiria.application.use_cases import ValkiriaService, _story_changes
 from valkiria.assistant.tools import ToolContext
@@ -114,7 +115,7 @@ class WorkflowEngine:
             return await self._run(state)
 
     async def approve(self, workflow_id: str, *, artifact: str, version: int, content_hash: str | None, decision: str, actor: str, comment: str = "",
-                      suggestions: dict[str, str] | None = None) -> tuple[WorkflowState, WorkflowPlan]:
+                      suggestions: dict[str, str] | None = None, assumptions_confirmed: bool = False) -> tuple[WorkflowState, WorkflowPlan]:
         async with self._lock(workflow_id):
             state = await self._load(workflow_id)
             record = state.artifacts.get(artifact)
@@ -125,6 +126,11 @@ class WorkflowEngine:
             if record.version != version or (content_hash and record.content_hash != content_hash):
                 raise WorkflowConflict(f"stale_version:{artifact}:current=v{record.version}")
             details: dict[str, Any] = {}
+            if artifact == "story" and decision == "approved" and record.assumptions:
+                # HU-003B, regla 4: los supuestos del borrador se confirman explícitamente antes de aprobar.
+                if not assumptions_confirmed:
+                    raise WorkflowConflict("assumptions_confirmation_required:" + " | ".join(record.assumptions))
+                details["assumptions_confirmed"] = record.assumptions
             if artifact == "invest" and decision == "approved":
                 pending = [c["name"] for c in actionable_suggestions(record.payload.get("criteria", []))]
                 decided = {name: value for name, value in (suggestions or {}).items() if name in pending and value in {"approved", "rejected"}}
@@ -185,7 +191,8 @@ class WorkflowEngine:
                 state.failures[key] = StepFailure(capability=key, error_code="internal_error", message="Error interno; consulta el trace_id.", attempts=attempt, retryable=False)
                 state.think("failed", "Error interno no previsto; el resto del flujo continúa.", key)
                 return False
-            record = state.put_artifact(artifact_of(key), output.payload, produced_by=key, based_on=output.based_on, warnings=output.warnings, memory_used=describe(recalled))
+            record = state.put_artifact(artifact_of(key), output.payload, produced_by=key, based_on=output.based_on, warnings=output.warnings, memory_used=describe(recalled),
+                                        assumptions=output.assumptions, model=getattr(self.service.llm, "model_name", None), prompt_version=PROMPT_VERSION)
             state.think("executed", f"{CAPABILITIES[key].hu}: {output.summary} Resultado: '{record.key}' v{record.version}.", key)
             return True
         return False
@@ -295,6 +302,7 @@ def view(state: WorkflowState, current: WorkflowPlan, *, reasoning_limit: int = 
         "next_actions": current.next_actions(state),
         "artifacts": {key: {"version": r.version, "content_hash": r.content_hash, "approved": r.approved,
                             "requires_approval": bool(key in CAPABILITIES and CAPABILITIES[key].approvable and not r.approved),
+                            "assumptions": r.assumptions, "model": r.model, "prompt_version": r.prompt_version,
                             "pending_suggestions": [c["name"] for c in actionable_suggestions(r.payload.get("criteria", []))] if key == "invest" and not r.approved else [],
                             "produced_by": r.produced_by, "based_on": r.based_on, "memory_used": r.memory_used,
                             "warnings": r.warnings, "payload": r.payload} for key, r in state.artifacts.items()},

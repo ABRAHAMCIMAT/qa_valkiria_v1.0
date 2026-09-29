@@ -59,6 +59,11 @@ class ArtifactRecord(BaseModel):
     approval: Approval | None = None
     # Recuerdos de largo plazo que se consideraron al generarlo (explicabilidad).
     memory_used: list[dict[str, Any]] = Field(default_factory=list)
+    # HU-003B, regla 4: supuestos que el PO debe confirmar antes de aprobar.
+    assumptions: list[str] = Field(default_factory=list)
+    # RT-06: modelo y versión del prompt con que se generó.
+    model: str | None = None
+    prompt_version: str | None = None
     created_at: datetime = Field(default_factory=utcnow)
 
     @property
@@ -99,12 +104,14 @@ class WorkflowState(BaseModel):
     updated_at: datetime = Field(default_factory=utcnow)
 
     def put_artifact(self, key: str, payload: dict[str, Any], *, produced_by: str, based_on: dict[str, int], warnings: list[str] | None = None,
-                     memory_used: list[dict[str, Any]] | None = None) -> ArtifactRecord:
+                     memory_used: list[dict[str, Any]] | None = None, assumptions: list[str] | None = None, model: str | None = None,
+                     prompt_version: str | None = None) -> ArtifactRecord:
         previous = self.artifacts.get(key)
         if previous:
             self.history.append(previous)
         record = ArtifactRecord(key=key, version=(previous.version + 1) if previous else 1, payload=payload, content_hash=content_hash(payload),
-                                based_on=based_on, produced_by=produced_by, warnings=warnings or [], memory_used=memory_used or [])
+                                based_on=based_on, produced_by=produced_by, warnings=warnings or [], memory_used=memory_used or [],
+                                assumptions=assumptions or [], model=model, prompt_version=prompt_version)
         self.artifacts[key] = record
         self.failures.pop(produced_by, None)
         return record

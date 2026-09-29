@@ -28,6 +28,7 @@ from valkiria.application.automation_execution import (
 from valkiria.application.use_cases import ValkiriaService
 from valkiria.assistant import ReasoningAssistant, build_toolbox, route_message
 from valkiria.assistant.capabilities import capability_summary
+from valkiria.assistant.routing import is_conversational
 from valkiria.assistant.tools import ToolContext
 from valkiria.domain.models import UserStory
 from valkiria.infrastructure.execution_memory import (
@@ -157,6 +158,8 @@ class WorkflowApprovalReq(BaseModel):
     decision: Literal["approved", "rejected"]
     comment: str = Field(default="", max_length=2000)
     suggestions: dict[str, Literal["approved", "rejected"]] | None = None
+    # HU-003B, regla 4: confirma los supuestos del borrador de la HU antes de aprobarla.
+    assumptions_confirmed: bool = False
 
 
 class WorkflowEditReq(BaseModel):
@@ -180,7 +183,8 @@ def create_app(llm=None):
     batches = InMemoryBatchStore()
     executions = InMemoryExecutionStore()
     reports = InMemoryReportStore()
-    llm = llm or OpenAICompatibleLLM(settings.llm_base_url, settings.llm_model, settings.secret("llm_api_key"), auth_header=settings.llm_auth_header)
+    llm = llm or OpenAICompatibleLLM(settings.llm_base_url, settings.llm_model, settings.secret("llm_api_key"), timeout_seconds=settings.llm_timeout_seconds,
+                                     auth_header=settings.llm_auth_header)
     database_executor = build_synthetic_executor(settings.db_profile, settings.secret("synthetic_database_url")) if settings.mode == "synthetic" else None
     automation_runner = PlaywrightRunner(settings.automation_headless, settings.automation_timeout_seconds) if settings.automation_execute and settings.automation_runner == "playwright" else None
     service = ValkiriaService(llm, audit, metrics, stories)
@@ -267,27 +271,45 @@ def create_app(llm=None):
 
     @app.post("/v1/chat")
     async def chat(req: ChatReq, request: Request, x_actor: str = Header(default="anonymous")):
+        trace_id = request.state.trace_id
         session_id = req.session_id or str(uuid4())
         session = await memory.session(session_id)
         # Memoria de corto plazo: sin historial del cliente se usa el hilo guardado, incluida la HU en curso.
         history = [t.model_dump() for t in req.history] or await memory.short_term.history(session_id)
         story_id = req.story_id or (session.facts.get("story_id") if session else None)
         current = await stories.get(story_id) if story_id else None
-        if route_message(req.message) == "assistant":
-            # Pregunta o petición fuera del flujo de HU: se razona con herramientas y se responde con honestidad.
-            extra = f"HU en curso: '{current.title}' v{current.version}: {current.description}" if current else ""
-            answer, recalled = await ask_assistant(req.message, actor=x_actor, namespace=req.namespace, session_id=session_id, trace_id=request.state.trace_id, extra=extra)
-            story = answer.outputs.get("story")
-            result = {"intent": "responder" if answer.status == "answered" else "no_puedo", "reply": answer.answer, "assumptions": [], "story": story, "changes": None,
-                      "assistant": answer.model_dump(mode="json", exclude={"outputs"})}
-        else:
-            query = req.message + (f" {current.title} {current.description}" if current else "")
-            recalled = await memory.recall(query, task="chat", namespace=req.namespace)
-            result = await service.converse(req.message, history, current, x_actor, memory=recall_prompt(recalled))
+        recalled: list = []
+        try:
+            if route_message(req.message) == "assistant" and not is_conversational(req.message):
+                # Pregunta o petición fuera del flujo de HU: se razona con herramientas y se responde con honestidad.
+                extra = f"HU en curso: '{current.title}' v{current.version}: {current.description}" if current else ""
+                answer, recalled = await ask_assistant(req.message, actor=x_actor, namespace=req.namespace, session_id=session_id, trace_id=trace_id, extra=extra)
+                story = answer.outputs.get("story")
+                result = {"intent": "responder" if answer.status == "answered" else "no_puedo", "reply": answer.answer, "assumptions": [], "story": story, "changes": None,
+                          "split": [], "assistant": answer.model_dump(mode="json", exclude={"outputs"})}
+            else:
+                query = req.message + (f" {current.title} {current.description}" if current else "")
+                recalled = await memory.recall(query, task="chat", namespace=req.namespace)
+                # Los turnos antiguos que salieron de la ventana llegan resumidos: el hilo no se pierde en conversaciones largas.
+                earlier = "Antes en esta conversación:\n" + "\n".join(f"- {line}" for line in session.summary[-8:]) if session and session.summary else ""
+                context = "\n\n".join(part for part in (recall_prompt(recalled), earlier) if part)
+                result = await service.converse(req.message, history, current, x_actor, memory=context)
+        except (LLMProviderError, TimeoutError) as exc:
+            # RT-04: error claro con trace_id; la conversación y la HU se conservan y se puede reintentar. La conversación no se rompe.
+            event(logger, logging.WARNING, "chat_llm_no_disponible", trace_id=trace_id, error=getattr(exc, "code", type(exc).__name__))
+            return {"intent": "error", "reply": ("Disculpa, no pude procesar tu mensaje porque el modelo no respondió a tiempo. Tu conversación y la historia en curso se conservan; "
+                                                 f"¿lo intentamos de nuevo? (Referencia: {trace_id})"), "assumptions": [], "story": None, "changes": None, "split": [],
+                    "retryable": True, "trace_id": trace_id, "session_id": session_id if memory.enabled else None, "memory": {"recalled": []}}
+        # Frontera de la conversación: ningún error interno debe romper el chat ni exponer detalles.
+        except Exception as exc:  # noqa: BLE001
+            event(logger, logging.ERROR, "chat_error_interno", trace_id=trace_id, error_type=type(exc).__name__)
+            return {"intent": "error", "reply": ("Disculpa, tuve un problema interno al procesar tu mensaje. No se perdió nada de lo que llevamos; "
+                                                 f"¿lo intentamos de nuevo o prefieres reformularlo? (Referencia: {trace_id})"), "assumptions": [], "story": None, "changes": None,
+                    "split": [], "retryable": True, "trace_id": trace_id, "session_id": session_id if memory.enabled else None, "memory": {"recalled": []}}
         new_story_id = (result.get("story") or {}).get("id") or story_id
         await memory.add_turn(session_id, "user", req.message)
         await memory.add_turn(session_id, "assistant", result["reply"], facts={"story_id": str(new_story_id) if new_story_id else None}, intent=result["intent"])
-        return result | {"session_id": session_id if memory.enabled else None, "memory": {"recalled": describe(recalled)}}
+        return result | {"session_id": session_id if memory.enabled else None, "memory": {"recalled": describe(recalled)}, "trace_id": trace_id}
 
     @app.post("/v1/assistant/ask")
     async def assistant_ask(req: AssistantReq, request: Request, x_actor: str = Header(default="anonymous")):
@@ -485,7 +507,7 @@ def create_app(llm=None):
     @app.post("/v1/workflows/{workflow_id}/approvals")
     async def approve_workflow_artifact(workflow_id: str, req: WorkflowApprovalReq, x_actor: str = Header(default="anonymous")):
         return view(*await workflows.approve(workflow_id, artifact=req.artifact, version=req.version, content_hash=req.content_hash, decision=req.decision,
-                                             actor=x_actor, comment=req.comment, suggestions=req.suggestions))
+                                             actor=x_actor, comment=req.comment, suggestions=req.suggestions, assumptions_confirmed=req.assumptions_confirmed))
 
     @app.put("/v1/workflows/{workflow_id}/artifacts/{artifact}")
     async def edit_workflow_artifact(workflow_id: str, artifact: str, req: WorkflowEditReq, x_actor: str = Header(default="anonymous")):

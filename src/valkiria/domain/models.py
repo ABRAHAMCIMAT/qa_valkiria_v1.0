@@ -104,6 +104,9 @@ class RiskAssessment(BaseModel):
     level: RiskLevel
     justification: str
     mitigation: str
+    # HU-005: complejidad, dependencias y criticidad de 1 a 5; el nivel se deriva de la suma (3–6 bajo, 7–11 medio, 12–15 alto).
+    scores: dict[str, int] = Field(default_factory=dict)
+    score_total: int | None = None
     defect_history_considered: bool = False
     execution_order: int = 0
 

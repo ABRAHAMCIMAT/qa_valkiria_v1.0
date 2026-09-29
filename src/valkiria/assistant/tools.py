@@ -37,6 +37,10 @@ class Param:
     required: bool = True
     choices: tuple[str, ...] = ()
     max_length: int = 4000
+    # Cómo pedir el dato al usuario si falta ("el SLA: tiempo de respuesta p95…").
+    ask: str | None = None
+    # Extracción determinista desde la petición para valores cerrados ("app móvil" → "mobile").
+    extract: Callable[[str], Any] | None = None
 
 
 @dataclass

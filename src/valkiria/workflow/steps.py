@@ -14,6 +14,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from valkiria.application.automation_execution import create_automation_batch
+from valkiria.application.prompts import INVEST_SYSTEM, MATRIX_SYSTEM, REVISION_SYSTEM
 from valkiria.application.qa_artifacts import (
     MAX_AUTOMATION_BATCH,
     PolicyViolation,
@@ -21,14 +22,12 @@ from valkiria.application.qa_artifacts import (
     performance_plan,
 )
 from valkiria.application.use_cases import (
-    INVEST_SYSTEM,
-    MATRIX_SYSTEM,
-    STORY_SYSTEM,
     ValkiriaService,
     _normalize_invest,
     _normalize_matrix,
     _normalize_story,
     _story_changes,
+    matrix_user_prompt,
 )
 from valkiria.domain.models import InvestEvaluation, TestMatrix, UserStory
 from valkiria.memory.service import with_memory
@@ -57,6 +56,7 @@ class StepOutput:
     based_on: dict[str, int]
     warnings: list[str] = field(default_factory=list)
     summary: str = ""
+    assumptions: list[str] = field(default_factory=list)
 
 
 def _story(state: WorkflowState) -> UserStory:
@@ -72,8 +72,13 @@ async def _generate(service: ValkiriaService, system: str, user: str, schema: di
 
 
 async def run_story(state: WorkflowState, service: ValkiriaService, memory: str = "") -> StepOutput:
-    story = await service.create_story(str(state.params["requirement"]), state.actor, memory=memory)
-    return StepOutput(story.model_dump(mode="json"), {}, ["Borrador generado por IA (HU-003B)."], f"HU '{story.title}' creada en borrador.")
+    story, extras = await service.draft_story(str(state.params["requirement"]), state.actor, memory=memory)
+    warnings = ["Borrador generado por IA (HU-003B)."]
+    if extras["assumptions"]:
+        warnings.append("Supuestos que el PO debe confirmar antes de aprobar (HU-003B, regla 4): " + "; ".join(extras["assumptions"]) + ".")
+    if extras["split"]:
+        warnings.append("Requerimiento amplio: se sugiere dividirlo (HU-003B, regla 2). Esta HU cubre el flujo principal; otras HU propuestas: " + "; ".join(extras["split"]) + ".")
+    return StepOutput(story.model_dump(mode="json"), {}, warnings, f"HU '{story.title}' creada en borrador.", assumptions=extras["assumptions"])
 
 
 async def run_invest(state: WorkflowState, service: ValkiriaService, memory: str = "") -> StepOutput:
@@ -95,12 +100,6 @@ async def run_invest(state: WorkflowState, service: ValkiriaService, memory: str
     if pending:
         warnings.append("Sugerencias que el PO debe aprobar o rechazar: " + ", ".join(pending) + ".")
     return StepOutput(payload, _versions(state, "story"), warnings, f"INVEST evaluado: {sum(c['status'] == 'cumple' for c in criteria)}/6 cumplen.")
-
-
-REVISION_SYSTEM = (
-    STORY_SYSTEM + " Recibirás una historia existente y sugerencias aprobadas por el Product Owner. "
-    "Aplica SOLO esas sugerencias y conserva literalmente todo lo demás (HU-003A)."
-)
 
 
 async def run_story_revision(state: WorkflowState, service: ValkiriaService, memory: str = "") -> StepOutput:
@@ -151,7 +150,7 @@ async def run_matrix(state: WorkflowState, service: ValkiriaService, memory: str
     warnings: list[str] = []
     findings = validate_matrix(cases, ids)
     if findings:
-        repair = "Corrige la matriz. Problemas detectados:\n- " + "\n- ".join(findings[:15]) + "\n\nHistoria:\n" + story.model_dump_json()
+        repair = "Corrige la matriz. Problemas detectados:\n- " + "\n- ".join(findings[:15]) + "\n\nHistoria:\n" + matrix_user_prompt(story)
         repaired = _normalize_matrix(await _generate(service, MATRIX_SYSTEM, repair, TestMatrix.model_json_schema()))["cases"]
         if len(validate_matrix(repaired, ids)) < len(findings):
             cases = repaired

@@ -34,7 +34,8 @@ GLOSSARY: dict[str, str] = {
 }
 
 
-_CONCEPTUAL = re.compile(r"\b(que es|que son|que significa|significado|diferencia|diferencias|define|definicion|explica|explicame|en que consiste|para que sirve)\b")
+_CONCEPTUAL = re.compile(r"\b(que es|que son|cual es|cuales son|que significa|significado|diferencia|diferencias|define|definicion|explica|explicame|"
+                         r"en que consiste|para que sirve|que tipos)\b")
 
 
 def is_conceptual(text: str) -> bool:

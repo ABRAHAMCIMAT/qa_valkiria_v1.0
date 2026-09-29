@@ -303,10 +303,16 @@ async function converse(msg){
       state.story = d.story;
       html += storyDoc(d.story, d.changes);
     }
-    if(d.assumptions?.length) html += '<div class="notice"><strong>Supuestos considerados</strong><ul>'+d.assumptions.map(a => '<li>'+esc(a)+'</li>').join('')+'</ul></div>';
+    if(d.assumptions?.length) html += '<div class="notice"><strong>Supuestos por confirmar</strong> (confírmalos o corrígelos antes de aprobar la historia)<ul>'+d.assumptions.map(a => '<li>'+esc(a)+'</li>').join('')+'</ul></div>';
+    if(d.split?.length) html += '<div class="doc-actions split">'+d.split.map((p, i) => '<button class="btn" data-split="'+i+'">'+icon('file')+'Redactar: '+esc(p.title)+'</button>').join('')+'</div>';
+    if(d.intent === 'error') html += '<div class="doc-actions"><button class="btn" data-retry="1">'+icon('check-circle')+'Intentar de nuevo</button></div>';
     working.querySelector('.body').innerHTML = html;
     bindDocActions(working);
-    state.history.push({role:'user', content: msg}, {role:'assistant', content: d.reply});
+    // HU-003B: el PO elige qué historia de la división se redacta.
+    working.querySelectorAll('[data-split]').forEach(b => b.onclick = () => { const p = d.split[+b.dataset.split]; send('Redacta la historia: '+p.title+(p.description ? '. '+p.description : '')); });
+    working.querySelectorAll('[data-retry]').forEach(b => b.onclick = () => { if(!state.busy) converse(msg); });
+    // Un error no entra al historial: al reintentar, la conversación sigue como si no hubiera pasado.
+    if(d.intent !== 'error') state.history.push({role:'user', content: msg}, {role:'assistant', content: d.reply});
   } catch(e){ showError(working, e.message, () => converse(msg)); }
   finally { setBusy(false); renderPipeline(); renderSession(); scroll(); input.focus(); }
 }
@@ -400,6 +406,7 @@ function renderRisk(d, current){
   if(current) state.risk = d.level;
   const summary = 'Clasifico el riesgo como '+riskLabel(d.level).toLowerCase()+'. '+(d.level==='high'?'Recomiendo priorizar estas pruebas en el primer ciclo.':'No bloquea el avance de QA, pero conviene aplicar la mitigación propuesta.');
   const h = '<p>'+esc(summary)+'</p><div class="doc"><div class="doc-head">'+icon('shield')+'<span class="kind">Análisis de riesgo</span><div class="chips"><span class="chip '+riskClass(d.level)+'">'+esc(riskLabel(d.level))+'</span></div></div><div class="doc-body">'+
+    (d.score_total ? '<div class="label">Puntuación ('+d.score_total+' de 15)</div><div class="chips" style="margin:4px 0 8px">'+Object.entries(d.scores||{}).map(([k,v]) => '<span class="chip">'+esc(k)+': '+v+'/5</span>').join('')+'</div>' : '')+
     '<div class="label">Justificación</div><div class="desc" style="margin-top:0">'+esc(d.justification)+'</div>'+
     '<div class="doc-section"><div class="label">Mitigación</div><div class="desc" style="margin-top:0">'+esc(d.mitigation)+'</div></div></div></div>';
   return { html: h, summary };

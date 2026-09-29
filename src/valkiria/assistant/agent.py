@@ -24,6 +24,10 @@ from typing import Any, Literal
 import httpx
 from pydantic import BaseModel, Field
 
+from valkiria.application.prompts import ASSISTANT_ARGS_SYSTEM as ARGS_SYSTEM
+from valkiria.application.prompts import ASSISTANT_COMPOSE_SYSTEM as COMPOSE_SYSTEM
+from valkiria.application.prompts import ASSISTANT_FINAL_TURN as FINAL_PROMPT
+from valkiria.application.prompts import ASSISTANT_SYSTEM as SYSTEM
 from valkiria.application.qa_artifacts import PolicyViolation
 from valkiria.assistant.capabilities import (
     capability_summary,
@@ -43,33 +47,6 @@ from valkiria.infrastructure.logging import event, get_logger
 from valkiria.memory.text import fold, tokens
 from valkiria.providers.openai_compatible import LLMProviderError
 
-SYSTEM = """Eres Valkiria, asistente de QA para Nissan. Resuelves la petición razonando paso a paso y usando herramientas reales.
-En cada turno responde SOLO un objeto JSON con UNA de estas formas:
-{{"razon": "por qué (una frase)", "accion": "usar_herramienta", "herramienta": "<nombre exacto>", "argumentos": {{...}}}}
-{{"razon": "por qué (una frase)", "accion": "responder", "respuesta": "respuesta final en español"}}
-{{"razon": "por qué (una frase)", "accion": "no_puedo", "falta": "la capacidad que haría falta"}}
-
-Reglas:
-1. Si la petición necesita datos (inventario, concesionarios, citas, estado de un flujo, análisis de un script, memoria del equipo), usa la herramienta; nunca inventes datos.
-2. Si ya tienes observaciones suficientes, responde basándote en ellas y menciona de qué herramienta salen.
-3. Para conceptos de QA (tipos de prueba, INVEST, técnicas) consulta primero glosario_qa; si no está, responde con conocimiento general.
-4. Si ninguna herramienta hace lo que se pide, usa "no_puedo". No finjas haber hecho algo que no hiciste.
-5. Usa solo herramientas del catálogo con sus argumentos; no repitas una herramienta con los mismos argumentos.
-6. Máximo {max_steps} pasos. Sé breve y concreto; sin markdown.
-
-CATÁLOGO:
-{catalog}"""
-
-FINAL_PROMPT = "Ya no puedes usar más herramientas. Responde ahora con la acción \"responder\" usando solo las observaciones anteriores, o \"no_puedo\" si no bastan."
-COMPOSE_SYSTEM = (
-    "Eres Valkiria. Redacta en español la respuesta a la pregunta usando EXCLUSIVAMENTE los datos verificados. "
-    "Menciona los nombres, cifras y conclusiones tal como aparecen; no agregues información ni digas que no puedes. "
-    'Responde solo JSON: {"respuesta": "..."}'
-)
-ARGS_SYSTEM = (
-    "Extrae de la petición los argumentos de la herramienta indicada. Responde solo un objeto JSON con esos argumentos, sin texto adicional. "
-    "Si un argumento no aparece en la petición, omítelo; no lo inventes."
-)
 DUPLICATE = "Consulta repetida: ya tienes ese resultado."
 _REFUSAL = re.compile(r"\b(no (se )?puedo|no se puede|no tengo (la )?(capacidad|informacion|acceso)|no es posible|no cuento con)\b")
 # Hablar de la herramienta o de la observación en vez de responder ("otros que no se muestran en esta observación") no es fiel a los datos.
@@ -139,6 +116,9 @@ class _Run:
     summaries: dict[str, Summary] = field(default_factory=dict)
     seen: set[str] = field(default_factory=set)
     reviewed: bool = False
+    # Datos obligatorios que la petición no trae, por herramienta (se piden al usuario, no se inventan).
+    missing: dict[str, list[str]] = field(default_factory=dict)
+    question: str = ""
 
 
 class ReasoningAssistant:
@@ -157,7 +137,7 @@ class ReasoningAssistant:
             return AssistantAnswer(status="unsupported", answer=text, mode="policy", missing_capability=block.capability, capabilities=capability_summary(self.toolbox))
         if self.llm is None:
             return await self._deterministic(question, ctx, [], "No hay un modelo configurado.")
-        run = _Run()
+        run = _Run(question=question)
         # Pista determinista: las herramientas más afines a la petición orientan a un modelo pequeño.
         hints = self.toolbox.closest(question, limit=3)
         glossary = self.toolbox.get("glosario_qa")
@@ -166,6 +146,7 @@ class ReasoningAssistant:
             await self._use_tool(run, "El concepto está en el glosario verificado.", {"herramienta": glossary.name, "argumentos": {"termino": question}}, ctx)
         system = SYSTEM.format(max_steps=self.max_steps, catalog=self.toolbox.catalog())
         draft: str | None = None
+        draft_grounded = False
         refused: str | None = None
         while len(run.steps) < self.max_steps + 1:
             final_turn = len(run.steps) >= self.max_steps
@@ -186,6 +167,7 @@ class ReasoningAssistant:
             number = len(run.steps) + 1
             if action == "answer":
                 draft = html.unescape(str(data.get("respuesta") or data.get("answer") or "")).strip()
+                draft_grounded = bool(run.used)
                 strong = self._strong_hint(question, hints)
                 if draft and not run.used and strong and not run.reviewed and not final_turn:
                     # Responder de memoria cuando hay una herramienta claramente afín suele producir datos inventados.
@@ -223,7 +205,17 @@ class ReasoningAssistant:
             # El modelo se rindió, respondió de memoria o usó algo irrelevante, pero una herramienta encaja claramente: se usa.
             await self._call_hint(run, strong, question, ctx)
         if run.used:
-            return await self._compose(question, run, draft, ctx)
+            # Un borrador escrito antes de consultar cualquier herramienta es de memoria: no puede ser la respuesta final.
+            return await self._compose(question, run, draft if draft_grounded else None, ctx)
+        if draft and draft.rstrip().endswith("?"):
+            # Una pregunta de aclaración (por ejemplo, pedir el SLA) no afirma nada: no lleva la nota de "no verificado".
+            return AssistantAnswer(status="answered", answer=draft, steps=run.steps, outputs=ctx.outputs)
+        if run.missing:
+            # HU-008A, regla 3 y en general: si faltan datos obligatorios, se piden con amabilidad en vez de inventarlos.
+            absent = next(iter(run.missing.values()))
+            needed = absent[0] if len(absent) == 1 else ", ".join(absent[:-1]) + " y " + absent[-1]
+            text = f"Con gusto te ayudo con eso. Para no inventar datos, ¿me indicas {needed}?"
+            return AssistantAnswer(status="answered", answer=text, steps=run.steps, mode="tool", outputs=ctx.outputs)
         if draft:
             return AssistantAnswer(status="answered", answer=f"{draft}\n\n{UNGROUNDED_NOTE}", steps=run.steps, outputs=ctx.outputs)
         if refused is not None:
@@ -252,6 +244,9 @@ class ReasoningAssistant:
             except (LLMProviderError, TimeoutError, ValueError, TypeError):
                 return
             args = args.get("argumentos", args) if isinstance(args, dict) else {}
+            # Al forzar la herramienta solo se envían los datos obligatorios: un opcional mal elegido
+            # (por ejemplo, una herramienta no compatible con la plataforma) bloquearía una consulta válida.
+            args = {p.name: args[p.name] for p in tool.params if p.required and p.name in args}
         await self._use_tool(run, f"La herramienta {tool.name} encaja claramente con la petición.", {"herramienta": tool.name, "argumentos": args}, ctx)
 
     async def _compose(self, question: str, run: _Run, draft: str | None, ctx: ToolContext, *, use_llm: bool = True) -> AssistantAnswer:
@@ -287,10 +282,19 @@ class ReasoningAssistant:
         tool = self.toolbox.resolve(name)
         if not tool:
             return Step(number=number, reason=reason, action="tool", tool=name, error=f"La herramienta '{name}' no existe. Disponibles: {', '.join(t.name for t in self.toolbox.all())}.")
+        raw_args = dict(raw_args) if isinstance(raw_args, dict) else {}
+        for param in tool.params:
+            # Valores cerrados que la petición menciona explícitamente: se toman de ella, no de lo que el modelo recuerde.
+            if param.extract and run.question and param.extract(run.question) and (param.required or param.name not in raw_args):
+                raw_args[param.name] = param.extract(run.question)
         try:
             args = tool.validate(raw_args)
         except ToolArgumentError as exc:
-            return Step(number=number, reason=reason, action="tool", tool=tool.name, arguments=raw_args if isinstance(raw_args, dict) else {}, error=f"Argumentos inválidos: {exc}")
+            provided = raw_args
+            absent = [p.ask or p.description for p in tool.params if p.required and provided.get(p.name) in (None, "")]
+            if absent:
+                run.missing[tool.name] = absent
+            return Step(number=number, reason=reason, action="tool", tool=tool.name, arguments=provided, error=f"Argumentos inválidos: {exc}")
         key = tool.name + json.dumps(args, sort_keys=True, default=str)
         if key in run.seen:
             return Step(number=number, reason=reason, action="tool", tool=tool.name, arguments=args, error=DUPLICATE)

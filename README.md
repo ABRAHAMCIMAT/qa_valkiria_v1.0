@@ -16,6 +16,7 @@ Incluye un perfil E2E seguro con datos Nissan ficticios, PostgreSQL efímero, ap
 - [Flujo de agentes por historia (dependencias, aprobaciones y reanudación)](docs/flujo-historias.md)
 - [Memoria de corto y largo plazo](docs/memoria.md)
 - [Asistente de razonamiento con herramientas (peticiones fuera del flujo)](docs/asistente.md)
+- [System prompts: reglas de negocio, conversación y evaluación](docs/prompts.md)
 - [Ciclo de vida LLMOps](docs/llmops-lifecycle.md)
 - [Quality gates](docs/quality-gates.md)
 - [E2E sintética Nissan](docs/e2e-synthetic.md)
