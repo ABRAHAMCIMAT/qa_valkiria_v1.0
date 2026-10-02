@@ -10,7 +10,8 @@ Incluye un perfil E2E seguro con datos Nissan ficticios, PostgreSQL efímero, ap
 
 ## Documentación
 
-- [Arquitectura](docs/arquitectura.md)
+- [Arquitectura (modelo 4+1)](docs/arquitectura.md)
+  - [+1 Escenarios](docs/arquitectura/01-escenarios.md) · [Vista lógica](docs/arquitectura/02-vista-logica.md) · [Vista de procesos](docs/arquitectura/03-vista-procesos.md) · [Vista de desarrollo](docs/arquitectura/04-vista-desarrollo.md) · [Vista física](docs/arquitectura/05-vista-fisica.md) · [Decisiones, calidad y riesgos](docs/arquitectura/06-decisiones-calidad-riesgos.md)
 - [Despliegue: configuración, Docker, Compose, CI y Kubernetes](docs/despliegue.md)
 - [Orquestación multiagente](docs/multiagente-orquestacion.md)
 - [Flujo de agentes por historia (dependencias, aprobaciones y reanudación)](docs/flujo-historias.md)

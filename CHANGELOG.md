@@ -2,6 +2,17 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/).
 
+## 2026-10-02 — Documentación de arquitectura 4+1
+
+### Añadido
+- **Arquitectura según el modelo 4+1** (`docs/arquitectura.md` y `docs/arquitectura/`), descrita a partir del código actual y con 51 diagramas Mermaid validados:
+  - **+1 Escenarios:** actores, casos de uso UML, recorrido del usuario, mapa de los 14 pasos y 10 escenarios clave con su prueba.
+  - **Vista lógica:** componentes; diagramas de clases del dominio, flujo, agentes, conversación, asistente y memoria; puertos y adaptadores; grafo de capacidades; modelo de datos (ER).
+  - **Vista de procesos:** secuencias de chat, motor, orquestador, asistente, ejecución HU-010, aprobaciones, pipeline y SQL seguro; máquinas de estado; concurrencia y manejo de errores.
+  - **Vista de desarrollo:** paquetes, dependencias reales con sus desviaciones, build, configuración, pruebas, CI y puntos de extensión.
+  - **Vista física:** despliegue en AKS, Compose y kind; flujo de secretos con Workload Identity; puertos y endurecimiento.
+  - **Decisiones, calidad y riesgos:** 13 ADR, árbol de utilidad, escenarios de calidad, 12 riesgos priorizados y hoja de ruta.
+
 ## 2026-09-29 — Los resultados alimentan el flujo y el pipeline de Azure DevOps (incremento 3)
 
 ### Añadido
